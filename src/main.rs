@@ -13,6 +13,7 @@ struct PlayerCam {
 }
 
 fn main() {
+    println!("Starting program");
     // Try DX12 first; if it still fails, change to Backends::VULKAN and re-run.
     let forced = WgpuSettings {
         backends: Some(Backends::DX12), // or Backends::VULKAN
@@ -45,6 +46,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    println!("Running Setup");
     // camera
     commands.spawn((
         Camera3d::default(),
@@ -74,6 +76,7 @@ fn setup(
             }
         }
     }
+    println!("Finished Setup");
 }
 
 fn mouse_look(
