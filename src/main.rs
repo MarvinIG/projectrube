@@ -43,6 +43,9 @@ struct PlayerCam {
 struct MenuRoot;
 
 #[derive(Component)]
+struct MenuCamera;
+
+#[derive(Component)]
 struct DimText {
     dim: Dimension,
 }
@@ -118,6 +121,8 @@ fn menu_setup(mut commands: Commands, params: Res<WorldParams>) {
             MenuRoot,
         ))
         .id();
+
+    commands.spawn((Camera2d, MenuCamera));
 
     // Title
     commands.entity(root).with_children(|parent| {
@@ -283,8 +288,15 @@ fn update_dim_texts(params: Res<WorldParams>, mut q: Query<(&DimText, &mut Text)
     }
 }
 
-fn menu_cleanup(mut commands: Commands, q: Query<Entity, With<MenuRoot>>) {
-    for e in &q {
+fn menu_cleanup(
+    mut commands: Commands,
+    roots: Query<Entity, With<MenuRoot>>,
+    cams: Query<Entity, With<MenuCamera>>,
+) {
+    for e in &roots {
+        commands.entity(e).despawn();
+    }
+    for e in &cams {
         commands.entity(e).despawn();
     }
 }
