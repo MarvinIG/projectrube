@@ -12,3 +12,4 @@
 - Added multithreaded infinite chunk streaming with greedy meshing, frustum culling, and distance-based LOD.
 - Fixed chunk gap bug by generating neighbor border voxels and upgrading nearby chunks to full resolution.
 - Colored voxels: top blocks render green, subsoil brown, and underground stone gray.
+- Tuned noise amplitudes for varied hills and corrected mesh offset so all block faces render.

@@ -260,44 +260,45 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32) -> Mesh {
     // 2D terrain noise for varied heights
     let mut base = FastNoiseLite::with_seed(0);
     base.set_noise_type(Some(NoiseType::Perlin));
-    base.set_frequency(Some(0.002));
+    base.set_frequency(Some(0.01));
 
     let mut mid = FastNoiseLite::with_seed(1);
     mid.set_noise_type(Some(NoiseType::Perlin));
-    mid.set_frequency(Some(0.01));
+    mid.set_frequency(Some(0.03));
 
     let mut detail = FastNoiseLite::with_seed(2);
     detail.set_noise_type(Some(NoiseType::Perlin));
-    detail.set_frequency(Some(0.05));
+    detail.set_frequency(Some(0.08));
 
     // 3D noise for sparse caves and cliffs
     let mut cave = FastNoiseLite::with_seed(3);
     cave.set_noise_type(Some(NoiseType::Perlin));
-    cave.set_frequency(Some(0.03));
+    cave.set_frequency(Some(0.05));
 
     for z in 0..=size + 1 {
         for x in 0..=size + 1 {
             let wx = coord.x * CHUNK_SIZE + ((x as i32 - 1) * lod as i32);
             let wz = coord.z * CHUNK_SIZE + ((z as i32 - 1) * lod as i32);
 
-            let h_base = base.get_noise_2d(wx as f32, wz as f32) * 25.0;
-            let h_mid = mid.get_noise_2d(wx as f32, wz as f32) * 10.0;
-            let h_detail = detail.get_noise_2d(wx as f32, wz as f32) * 3.0;
-            let mut height = h_base + h_mid + h_detail + 40.0;
-            height = (height / 4.0).round() * 4.0; // create plateaus
-            let height = height.clamp(1.0, (MAX_HEIGHT - 1) as f32).round() as i32;
+            let h_base = base.get_noise_2d(wx as f32, wz as f32) * 10.0;
+            let h_mid = mid.get_noise_2d(wx as f32, wz as f32) * 5.0;
+            let h_detail = detail.get_noise_2d(wx as f32, wz as f32) * 2.0;
+            let mut height = h_base + h_mid + h_detail + 20.0;
+            height = (height / 2.0).round() * 2.0; // create plateaus
+            let height = height
+                .clamp(1.0, (CHUNK_SIZE - 1) as f32)
+                .round() as i32;
 
-            for y in 0..=size + 1 {
+            for y in 1..=size + 1 {
                 let wy = coord.y * CHUNK_SIZE + ((y as i32 - 1) * lod as i32);
                 if wy > height {
                     continue;
                 }
 
                 let noise = cave.get_noise_3d(wx as f32, wy as f32, wz as f32);
-                if noise > 0.8 {
+                if noise > 0.9 {
                     continue; // carve cave
                 }
-
                 let idx = shape.linearize([x, y, z]) as usize;
                 voxels[idx] = if wy == height {
                     GRASS
@@ -332,7 +333,13 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32) -> Mesh {
     {
         for quad in group.iter() {
             let start = positions.len() as u32;
-            positions.extend_from_slice(&face.quad_mesh_positions(quad, lod as f32));
+            let mut face_positions = face.quad_mesh_positions(quad, lod as f32);
+            for p in &mut face_positions {
+                p[0] -= lod as f32;
+                p[1] -= lod as f32;
+                p[2] -= lod as f32;
+            }
+            positions.extend_from_slice(&face_positions);
             normals.extend_from_slice(&face.quad_mesh_normals());
             indices.extend_from_slice(&face.quad_mesh_indices(start));
 
