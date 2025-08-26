@@ -10,3 +10,4 @@
 - Applied 3D Perlin noise to carve caves, cliffs, and ravines without exposing void spaces.
 - Switched to chunk-based world generation using 32×32×32 chunks with a configurable view width radius (default 4) and a maximum height of 128 blocks.
 - Added multithreaded infinite chunk streaming with greedy meshing, frustum culling, and distance-based LOD.
+- Chunks now upgrade to full resolution within three chunks of the player and generate neighbor border voxels to remove gaps between chunks.

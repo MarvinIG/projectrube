@@ -6,6 +6,7 @@
 - Perlin noise terrain generation on game start with corrected frequency for varied height.
 - World generation uses 32×32×32 chunks with a configurable view width radius and a maximum height of 128 blocks, plus stacked 2D noise and 3D noise caves.
 - Chunks stream infinitely as the player moves, meshed with a greedy algorithm and culled via camera frustum with distance-based LOD.
+- Nearby chunks automatically regenerate at full resolution and border voxels are populated to eliminate seams between chunks.
 
 ## WIP
 - None
