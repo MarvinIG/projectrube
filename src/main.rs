@@ -1,16 +1,16 @@
+mod game;
+mod menu;
+mod player;
 mod state;
 mod world;
-mod menu;
-mod game;
-mod player;
 
 use bevy::prelude::*;
+use bevy::render::RenderPlugin;
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::settings::{Backends, RenderCreation, WgpuSettings};
-use bevy::render::RenderPlugin;
 
 use game::setup_game;
-use menu::{menu_actions, menu_cleanup, menu_setup, update_dim_texts};
+use menu::{menu_actions, menu_cleanup, menu_setup, update_view_text};
 use player::{keyboard_move, mouse_look};
 use state::AppState;
 use world::WorldParams;
@@ -41,10 +41,13 @@ fn main() {
         .init_state::<AppState>()
         .add_systems(OnEnter(AppState::Menu), menu_setup)
         .add_systems(Update, menu_actions.run_if(in_state(AppState::Menu)))
-        .add_systems(Update, update_dim_texts.run_if(in_state(AppState::Menu)))
+        .add_systems(Update, update_view_text.run_if(in_state(AppState::Menu)))
         .add_systems(OnExit(AppState::Menu), menu_cleanup)
         .add_systems(OnEnter(AppState::Playing), setup_game)
-        .add_systems(Update, (mouse_look, keyboard_move).run_if(in_state(AppState::Playing)))
+        .add_systems(
+            Update,
+            (mouse_look, keyboard_move).run_if(in_state(AppState::Playing)),
+        )
         .add_systems(Startup, print_backend)
         .run();
 }
