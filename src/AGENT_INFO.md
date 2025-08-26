@@ -6,3 +6,6 @@
 - Added a dedicated MenuCamera and cleanup logic for spawning and despawning the menu UI camera.
 - Corrected Perlin noise frequency so terrain heights vary properly.
 - Refactored gameplay, menu, player controls, and world resources into separate modules to slim down `main.rs`.
+- Expanded world generation to a default 512x512 area.
+- Stacked multiple 2D Perlin noise layers for wide-spread terrain variation.
+- Applied 3D Perlin noise to carve caves, cliffs, and ravines without exposing void spaces.
