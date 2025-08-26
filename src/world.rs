@@ -46,9 +46,14 @@ struct ChunkMap {
 }
 
 /// Pending background generation tasks.
+///
+/// Each entry tracks the requested level of detail so that
+/// pending work can be cancelled or replaced if the player
+/// approaches a chunk and it needs to be regenerated at a
+/// higher resolution.
 #[derive(Resource, Default)]
 struct PendingTasks {
-    tasks: HashMap<IVec3, Task<(IVec3, u32, Mesh)>>,
+    tasks: HashMap<IVec3, (u32, Task<(IVec3, u32, Mesh)>)>,
 }
 
 /// Component tagging a chunk mesh entity.
@@ -92,6 +97,7 @@ fn spawn_required_chunks(
     mut pending: ResMut<PendingTasks>,
     mut map: ResMut<ChunkMap>,
     player: Query<&Transform, With<PlayerCam>>,
+    chunks: Query<&Chunk>,
 ) {
     let pool = AsyncComputeTaskPool::get();
     let player_pos = player
@@ -121,15 +127,34 @@ fn spawn_required_chunks(
     for x in -params.view_width..=params.view_width {
         for z in -params.view_width..=params.view_width {
             let coord = player_chunk + IVec3::new(x, 0, z);
-            if map.entities.contains_key(&coord) || pending.tasks.contains_key(&coord) {
-                continue;
+            let dist = x.abs().max(z.abs());
+            let required_lod = if dist <= 3 { 1 } else { 2 };
+
+            if let Some(&entity) = map.entities.get(&coord) {
+                if let Ok(chunk) = chunks.get(entity) {
+                    if chunk.lod != required_lod {
+                        commands.entity(entity).despawn();
+                        map.entities.remove(&coord);
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
             }
-            let lod = if x.abs().max(z.abs()) > params.view_width / 2 { 2 } else { 1 };
+
+            if let Some((lod, _)) = pending.tasks.get(&coord) {
+                if *lod == required_lod {
+                    continue;
+                }
+                pending.tasks.remove(&coord);
+            }
+
             let task = pool.spawn(async move {
-                let mesh = generate_chunk_mesh(coord, lod);
-                (coord, lod, mesh)
+                let mesh = generate_chunk_mesh(coord, required_lod);
+                (coord, required_lod, mesh)
             });
-            pending.tasks.insert(coord, task);
+            pending.tasks.insert(coord, (required_lod, task));
         }
     }
 }
@@ -142,7 +167,7 @@ fn process_chunk_tasks(
     material: Res<ChunkMaterial>,
 ) {
     let mut finished = Vec::new();
-    for (coord, task) in pending.tasks.iter_mut() {
+    for (coord, (_lod, task)) in pending.tasks.iter_mut() {
         if let Some((c, lod, mesh)) = future::block_on(future::poll_once(task)) {
             let handle = meshes.add(mesh);
             let entity = commands
@@ -233,19 +258,19 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32) -> Mesh {
     detail.set_noise_type(Some(NoiseType::Perlin));
     detail.set_frequency(Some(0.02));
 
-    for z in 0..size {
-        for x in 0..size {
-            let wx = coord.x * CHUNK_SIZE + (x as i32 * lod as i32);
-            let wz = coord.z * CHUNK_SIZE + (z as i32 * lod as i32);
+    for z in 0..=size + 1 {
+        for x in 0..=size + 1 {
+            let wx = coord.x * CHUNK_SIZE + ((x as i32 - 1) * lod as i32);
+            let wz = coord.z * CHUNK_SIZE + ((z as i32 - 1) * lod as i32);
             let base_val = base.get_noise_2d(wx as f32, wz as f32);
             let detail_val = detail.get_noise_2d(wx as f32, wz as f32);
             let height = ((base_val * 20.0) + (detail_val * 5.0) + 20.0)
                 .round()
                 .clamp(1.0, (MAX_HEIGHT - 1) as f32) as i32;
-            for y in 0..size {
-                let wy = coord.y * CHUNK_SIZE + (y as i32 * lod as i32);
+            for y in 0..=size + 1 {
+                let wy = coord.y * CHUNK_SIZE + ((y as i32 - 1) * lod as i32);
                 if wy <= height {
-                    let idx = shape.linearize([x + 1, y + 1, z + 1]) as usize;
+                    let idx = shape.linearize([x, y, z]) as usize;
                     voxels[idx] = FULL;
                 }
             }
