@@ -9,6 +9,8 @@
 - Nearby chunks automatically regenerate at full resolution and border voxels are populated to eliminate seams between chunks, fixing the previous chunk gap bug.
 - Surface blocks render green, the layer below brown, and deeper blocks gray.
 - Terrain noise retuned for noticeable hills and plateaus, and chunk mesh positions corrected so all faces render.
+- Terrain height now stacks five configurable noise layers adjustable from the title screen and saved to `settings.json`.
+- Pressing `P` in-game returns to the title screen and removes active world entities.
 
 ## WIP
 - None

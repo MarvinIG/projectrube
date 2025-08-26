@@ -14,6 +14,7 @@ use fastnoise_lite::{FastNoiseLite, NoiseType};
 use futures_lite::future;
 
 use crate::player::PlayerCam;
+use crate::settings::NoiseSettings;
 use crate::state::AppState;
 
 /// Size of one cubic chunk edge in blocks.
@@ -81,7 +82,8 @@ impl Plugin for WorldPlugin {
                     frustum_cull_chunks,
                 )
                     .run_if(in_state(AppState::Playing)),
-            );
+            )
+            .add_systems(OnExit(AppState::Playing), cleanup_chunks);
     }
 }
 
@@ -96,6 +98,7 @@ fn setup_chunk_material(mut commands: Commands, mut materials: ResMut<Assets<Sta
 fn spawn_required_chunks(
     mut commands: Commands,
     params: Res<WorldParams>,
+    settings: Res<NoiseSettings>,
     mut pending: ResMut<PendingTasks>,
     mut map: ResMut<ChunkMap>,
     player: Query<&Transform, With<PlayerCam>>,
@@ -151,8 +154,9 @@ fn spawn_required_chunks(
                 pending.tasks.remove(&coord);
             }
 
+            let settings = settings.clone();
             let task = pool.spawn(async move {
-                let mesh = generate_chunk_mesh(coord, required_lod);
+                let mesh = generate_chunk_mesh(coord, required_lod, settings);
                 (coord, required_lod, mesh)
             });
             pending.tasks.insert(coord, (required_lod, task));
@@ -191,6 +195,19 @@ fn process_chunk_tasks(
     for coord in finished {
         pending.tasks.remove(&coord);
     }
+}
+
+fn cleanup_chunks(
+    mut commands: Commands,
+    chunks: Query<Entity, With<Chunk>>,
+    mut map: ResMut<ChunkMap>,
+    mut pending: ResMut<PendingTasks>,
+) {
+    for e in &chunks {
+        commands.entity(e).despawn();
+    }
+    map.entities.clear();
+    pending.tasks.clear();
 }
 
 fn frustum_cull_chunks(
@@ -243,32 +260,28 @@ impl MergeVoxel for BlockType {
     }
 }
 
-fn generate_chunk_mesh(coord: IVec3, lod: u32) -> Mesh {
+fn generate_chunk_mesh(coord: IVec3, lod: u32, settings: NoiseSettings) -> Mesh {
     match lod {
-        1 => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, lod),
-        2 => build_mesh::<{ LOD2_SIZE_U32 + 3 }>(coord, lod),
-        _ => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, 1),
+        1 => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, lod, &settings),
+        2 => build_mesh::<{ LOD2_SIZE_U32 + 3 }>(coord, lod, &settings),
+        _ => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, 1, &settings),
     }
 }
 
-fn build_mesh<const N: u32>(coord: IVec3, lod: u32) -> Mesh {
+fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) -> Mesh {
     let size = N - 2;
 
     let shape = ConstShape3u32::<{ N }, { N }, { N }> {};
     let mut voxels = vec![EMPTY; (N * N * N) as usize];
 
-    // 2D terrain noise for varied heights
-    let mut base = FastNoiseLite::with_seed(0);
-    base.set_noise_type(Some(NoiseType::Perlin));
-    base.set_frequency(Some(0.01));
-
-    let mut mid = FastNoiseLite::with_seed(1);
-    mid.set_noise_type(Some(NoiseType::Perlin));
-    mid.set_frequency(Some(0.03));
-
-    let mut detail = FastNoiseLite::with_seed(2);
-    detail.set_noise_type(Some(NoiseType::Perlin));
-    detail.set_frequency(Some(0.08));
+    // 2D terrain noise layers for varied heights
+    let mut noises = Vec::new();
+    for layer in &settings.layers {
+        let mut n = FastNoiseLite::with_seed(layer.seed);
+        n.set_noise_type(Some(NoiseType::Perlin));
+        n.set_frequency(Some(layer.frequency));
+        noises.push((n, layer.amplitude));
+    }
 
     // 3D noise for sparse caves and cliffs
     let mut cave = FastNoiseLite::with_seed(3);
@@ -280,14 +293,12 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32) -> Mesh {
             let wx = coord.x * CHUNK_SIZE + ((x as i32 - 1) * lod as i32);
             let wz = coord.z * CHUNK_SIZE + ((z as i32 - 1) * lod as i32);
 
-            let h_base = base.get_noise_2d(wx as f32, wz as f32) * 10.0;
-            let h_mid = mid.get_noise_2d(wx as f32, wz as f32) * 5.0;
-            let h_detail = detail.get_noise_2d(wx as f32, wz as f32) * 2.0;
-            let mut height = h_base + h_mid + h_detail + 20.0;
+            let mut height = 20.0;
+            for (noise, amp) in &noises {
+                height += noise.get_noise_2d(wx as f32, wz as f32) * amp;
+            }
             height = (height / 2.0).round() * 2.0; // create plateaus
-            let height = height
-                .clamp(1.0, (CHUNK_SIZE - 1) as f32)
-                .round() as i32;
+            let height = height.clamp(1.0, (CHUNK_SIZE - 1) as f32).round() as i32;
 
             for y in 1..=size + 1 {
                 let wy = coord.y * CHUNK_SIZE + ((y as i32 - 1) * lod as i32);

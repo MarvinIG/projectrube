@@ -3677,6 +3677,8 @@ dependencies = [
  "fastnoise-lite",
  "futures-lite",
  "ndshape",
+ "serde",
+ "serde_json",
  "winit",
 ]
 

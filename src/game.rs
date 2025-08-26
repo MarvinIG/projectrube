@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::player::PlayerCam;
+use crate::state::AppState;
 
 /// Sets up the camera and lighting for the gameplay scene.
 ///
@@ -22,4 +23,26 @@ pub fn setup_game(mut commands: Commands) {
         DirectionalLight::default(),
         Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+}
+
+pub fn return_to_menu(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    if keys.just_pressed(KeyCode::KeyP) {
+        next_state.set(AppState::Menu);
+    }
+}
+
+pub fn game_cleanup(
+    mut commands: Commands,
+    cams: Query<Entity, With<PlayerCam>>,
+    lights: Query<Entity, With<DirectionalLight>>,
+) {
+    for e in &cams {
+        commands.entity(e).despawn();
+    }
+    for e in &lights {
+        commands.entity(e).despawn();
+    }
 }
