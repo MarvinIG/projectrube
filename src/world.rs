@@ -238,9 +238,9 @@ impl MergeVoxel for BoolVoxel {
 
 fn generate_chunk_mesh(coord: IVec3, lod: u32) -> Mesh {
     match lod {
-        1 => build_mesh::<{ CHUNK_SIZE_U32 + 2 }>(coord, lod),
-        2 => build_mesh::<{ LOD2_SIZE_U32 + 2 }>(coord, lod),
-        _ => build_mesh::<{ CHUNK_SIZE_U32 + 2 }>(coord, 1),
+        1 => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, lod),
+        2 => build_mesh::<{ LOD2_SIZE_U32 + 3 }>(coord, lod),
+        _ => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, 1),
     }
 }
 
