@@ -299,7 +299,6 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32) -> Mesh {
                 if noise > 0.9 {
                     continue; // carve cave
                 }
-
                 let idx = shape.linearize([x, y, z]) as usize;
                 voxels[idx] = if wy == height {
                     GRASS
