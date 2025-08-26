@@ -9,3 +9,4 @@
 - Stacked multiple 2D Perlin noise layers for wide-spread terrain variation.
 - Applied 3D Perlin noise to carve caves, cliffs, and ravines without exposing void spaces.
 - Switched to chunk-based world generation using 32×32×32 chunks with a configurable view width radius (default 4) and a maximum height of 128 blocks.
+- Added multithreaded infinite chunk streaming with greedy meshing, frustum culling, and distance-based LOD.

@@ -3675,6 +3675,7 @@ dependencies = [
  "bevy_rapier3d",
  "block-mesh",
  "fastnoise-lite",
+ "futures-lite",
  "ndshape",
  "winit",
 ]
