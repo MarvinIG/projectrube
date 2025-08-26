@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 
-use bevy::prelude::*;
+use bevy::math::Affine3A;
 use bevy::pbr::MeshMaterial3d;
+use bevy::prelude::*;
 use bevy::render::mesh::{Indices, Mesh, Mesh3d};
 use bevy::render::primitives::{Aabb, Frustum};
 use bevy::tasks::{AsyncComputeTaskPool, Task};
-use bevy::math::Affine3A;
 use block_mesh::ndshape::{ConstShape3u32, Shape};
-use block_mesh::{greedy_quads, GreedyQuadsBuffer, MergeVoxel, Voxel, VoxelVisibility, RIGHT_HANDED_Y_UP_CONFIG};
+use block_mesh::{
+    GreedyQuadsBuffer, MergeVoxel, RIGHT_HANDED_Y_UP_CONFIG, Voxel, VoxelVisibility, greedy_quads,
+};
 use fastnoise_lite::{FastNoiseLite, NoiseType};
 use futures_lite::future;
 
@@ -83,10 +85,7 @@ impl Plugin for WorldPlugin {
     }
 }
 
-fn setup_chunk_material(
-    mut commands: Commands,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
+fn setup_chunk_material(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
     let material = materials.add(Color::srgb_u8(150, 150, 150));
     commands.insert_resource(ChunkMaterial(material));
 }
@@ -100,10 +99,7 @@ fn spawn_required_chunks(
     chunks: Query<&Chunk>,
 ) {
     let pool = AsyncComputeTaskPool::get();
-    let player_pos = player
-        .single()
-        .map(|t| t.translation)
-        .unwrap_or(Vec3::ZERO);
+    let player_pos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
     let player_chunk = IVec3::new(
         (player_pos.x / CHUNK_SIZE as f32).floor() as i32,
         0,
@@ -113,7 +109,9 @@ fn spawn_required_chunks(
     // Despawn chunks far outside the view radius
     let mut to_remove = Vec::new();
     for (coord, entity) in map.entities.iter() {
-        let dist = (coord.x - player_chunk.x).abs().max((coord.z - player_chunk.z).abs());
+        let dist = (coord.x - player_chunk.x)
+            .abs()
+            .max((coord.z - player_chunk.z).abs());
         if dist > params.view_width + 2 {
             commands.entity(*entity).despawn();
             to_remove.push(*coord);
@@ -304,12 +302,25 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32) -> Mesh {
         }
     }
 
+    // Adjust all vertex positions so the chunk spans exactly CHUNK_SIZE
+    // Starting from 0. The greedy mesher generates vertices in the range
+    // [1, size + 1], which leaves an extra `lod` units offset on each axis
+    // and causes visible gaps between adjacent chunks. Shifting the
+    // positions by `lod` aligns neighbouring chunk meshes seamlessly.
+    for p in &mut positions {
+        p[0] -= lod as f32;
+        p[1] -= lod as f32;
+        p[2] -= lod as f32;
+    }
+
     use bevy::render::mesh::PrimitiveTopology;
     use bevy::render::render_asset::RenderAssetUsages;
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_indices(Indices::U32(indices));
     mesh
 }
-
