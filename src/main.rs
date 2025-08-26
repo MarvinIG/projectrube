@@ -13,7 +13,7 @@ use game::setup_game;
 use menu::{menu_actions, menu_cleanup, menu_setup, update_view_text};
 use player::{keyboard_move, mouse_look};
 use state::AppState;
-use world::WorldParams;
+use world::{WorldParams, WorldPlugin};
 
 fn main() {
     let forced = WgpuSettings {
@@ -38,6 +38,7 @@ fn main() {
                 }),
         )
         .init_resource::<WorldParams>()
+        .add_plugins(WorldPlugin)
         .init_state::<AppState>()
         .add_systems(OnEnter(AppState::Menu), menu_setup)
         .add_systems(Update, menu_actions.run_if(in_state(AppState::Menu)))
