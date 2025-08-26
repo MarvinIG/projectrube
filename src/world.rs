@@ -8,6 +8,9 @@ pub struct WorldParams {
 
 impl Default for WorldParams {
     fn default() -> Self {
-        Self { width: 10, depth: 10 }
+        Self {
+            width: 512,
+            depth: 512,
+        }
     }
 }
