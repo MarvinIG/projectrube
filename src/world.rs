@@ -288,7 +288,13 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
         let lx = ((wx - coord.x * CHUNK_SIZE) / lod as i32) + 1;
         let ly = ((wy - coord.y * CHUNK_SIZE) / lod as i32) + 1;
         let lz = ((wz - coord.z * CHUNK_SIZE) / lod as i32) + 1;
-        if lx >= 0 && lx <= size_i32 + 1 && ly >= 0 && ly <= size_i32 + 1 && lz >= 0 && lz <= size_i32 + 1 {
+        if lx >= 0
+            && lx <= size_i32 + 1
+            && ly >= 0
+            && ly <= size_i32 + 1
+            && lz >= 0
+            && lz <= size_i32 + 1
+        {
             let idx = shape.linearize([lx as u32, ly as u32, lz as u32]) as usize;
             voxels[idx] = block;
         }
@@ -317,9 +323,13 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
     boulder_noise.set_noise_type(Some(NoiseType::Perlin));
     boulder_noise.set_frequency(Some(0.02));
 
-    let mut tree_noise = FastNoiseLite::with_seed(4242);
-    tree_noise.set_noise_type(Some(NoiseType::Perlin));
-    tree_noise.set_frequency(Some(0.02));
+    let mut tree_density = FastNoiseLite::with_seed(4242);
+    tree_density.set_noise_type(Some(NoiseType::Perlin));
+    tree_density.set_frequency(Some(0.005));
+
+    let mut tree_scatter = FastNoiseLite::with_seed(4243);
+    tree_scatter.set_noise_type(Some(NoiseType::Perlin));
+    tree_scatter.set_frequency(Some(0.1));
 
     for z in 0..=size + 1 {
         for x in 0..=size + 1 {
@@ -384,9 +394,10 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
 
             if lod == 1 {
                 let b_val = boulder_noise.get_noise_2d(wx as f32, wz as f32);
-                let t_val = tree_noise.get_noise_2d(wx as f32, wz as f32);
-                if b_val > 0.75 {
-                    let radius = 1 + ((b_val - 0.75) * 4.0) as i32;
+                let density = (tree_density.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
+                let scatter = (tree_scatter.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
+                if b_val > 0.9 {
+                    let radius = 1 + ((b_val - 0.9) * 10.0) as i32;
                     for by in 0..=radius {
                         for bx in -radius..=radius {
                             for bz in -radius..=radius {
@@ -396,16 +407,20 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
                             }
                         }
                     }
-                } else if t_val > 0.6 {
-                    let trunk_h = 4 + ((t_val - 0.6) * 5.0) as i32;
+                } else if scatter < density * density * 0.5 {
+                    let variant =
+                        (tree_scatter.get_noise_2d(wx as f32 + 1000.0, wz as f32 + 1000.0) + 1.0)
+                            / 2.0;
+                    let trunk_h = 10 + (variant * 6.0) as i32;
                     for ty in 1..=trunk_h {
                         set_block(&mut voxels, wx, height + ty, wz, WOOD);
                     }
                     let top = height + trunk_h;
-                    for dx in -2..=2 {
-                        for dz in -2..=2 {
-                            for dy in 0..=2 {
-                                if dx * dx + dz * dz + dy * dy <= 9 {
+                    let canopy = 3 + (variant * 2.0) as i32;
+                    for dx in -canopy..=canopy {
+                        for dz in -canopy..=canopy {
+                            for dy in 0..=canopy {
+                                if dx * dx + dz * dz + dy * dy <= canopy * canopy {
                                     set_block(&mut voxels, wx + dx, top + dy, wz + dz, LEAF);
                                 }
                             }

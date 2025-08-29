@@ -13,7 +13,7 @@
 - Pressing `P` in-game returns to the title screen and removes active world entities.
 - Chunks retain full detail within an eight-chunk radius, and distant low-detail meshes sample the surface block so colors remain accurate when approached.
 - Chunks now spawn in stacked vertical layers up to eight chunks high, enabling a fully 3D world grid.
-- Ridged noise adds cliffs and overhangs while stone boulders and basic wood-and-leaf trees populate the terrain.
+- Ridged noise adds cliffs and overhangs while rarer stone boulders and density-driven, taller wood-and-leaf trees populate the terrain.
 
 ## WIP
 - None
