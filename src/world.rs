@@ -136,25 +136,25 @@ fn spawn_required_chunks(
             for y in 0..vertical_chunks {
                 let coord = player_chunk + IVec3::new(x, y, z);
 
-            if let Some(&entity) = map.entities.get(&coord) {
-                if let Ok(chunk) = chunks.get(entity) {
-                    if chunk.lod != required_lod {
-                        commands.entity(entity).despawn();
-                        map.entities.remove(&coord);
+                if let Some(&entity) = map.entities.get(&coord) {
+                    if let Ok(chunk) = chunks.get(entity) {
+                        if chunk.lod != required_lod {
+                            commands.entity(entity).despawn();
+                            map.entities.remove(&coord);
+                        } else {
+                            continue;
+                        }
                     } else {
                         continue;
                     }
-                } else {
-                    continue;
                 }
-            }
 
-            if let Some((lod, _)) = pending.tasks.get(&coord) {
-                if *lod == required_lod {
-                    continue;
+                if let Some((lod, _)) = pending.tasks.get(&coord) {
+                    if *lod == required_lod {
+                        continue;
+                    }
+                    pending.tasks.remove(&coord);
                 }
-                pending.tasks.remove(&coord);
-            }
 
             let settings = settings.clone();
             let task = pool.spawn(async move {
