@@ -137,25 +137,25 @@ fn spawn_required_chunks(
             for y in 0..MAX_CHUNKS_Y {
                 let coord = IVec3::new(player_chunk.x + x, y, player_chunk.z + z);
 
-            if let Some(&entity) = map.entities.get(&coord) {
-                if let Ok(chunk) = chunks.get(entity) {
-                    if chunk.lod != required_lod {
-                        commands.entity(entity).despawn();
-                        map.entities.remove(&coord);
+                if let Some(&entity) = map.entities.get(&coord) {
+                    if let Ok(chunk) = chunks.get(entity) {
+                        if chunk.lod != required_lod {
+                            commands.entity(entity).despawn();
+                            map.entities.remove(&coord);
+                        } else {
+                            continue;
+                        }
                     } else {
                         continue;
                     }
-                } else {
-                    continue;
                 }
-            }
 
-            if let Some((lod, _)) = pending.tasks.get(&coord) {
-                if *lod == required_lod {
-                    continue;
+                if let Some((lod, _)) = pending.tasks.get(&coord) {
+                    if *lod == required_lod {
+                        continue;
+                    }
+                    pending.tasks.remove(&coord);
                 }
-                pending.tasks.remove(&coord);
-            }
 
                 let settings = settings.clone();
                 let task = pool.spawn(async move {
@@ -297,11 +297,17 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
             let wx = coord.x * CHUNK_SIZE + ((x as i32 - 1) * lod as i32);
             let wz = coord.z * CHUNK_SIZE + ((z as i32 - 1) * lod as i32);
 
-            let mut height = 20.0;
-            for (noise, amp) in &noises {
-                height += noise.get_noise_2d(wx as f32, wz as f32) * amp;
+            let mut height = 40;
+            if let Some((first_noise, first_amp)) = noises.first() {
+                let val = (first_noise.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
+                height += (val * first_amp) as i32;
+
+                for (noise, amp) in &noises[1..] {
+                    let val = noise.get_noise_2d(wx as f32, wz as f32);
+                    height += (val * amp) as i32;
+                }
             }
-            let height = height.clamp(1.0, (MAX_HEIGHT - 1) as f32).round() as i32;
+            let height = height.clamp(1, MAX_HEIGHT - 1) as i32;
 
             for y in 1..=size + 1 {
                 let wy = coord.y * CHUNK_SIZE + ((y as i32 - 1) * lod as i32);

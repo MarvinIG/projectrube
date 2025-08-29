@@ -1,7 +1,7 @@
 {
   "layers": [
-    { "seed": 0, "frequency": 0.008, "amplitude": 150.0 },
-    { "seed": 1, "frequency": 0.000, "amplitude": 0.0 },
+    { "seed": 0, "frequency": 0.003, "amplitude": 150.0 },
+    { "seed": 1, "frequency": 0.001, "amplitude": 80.0 },
     { "seed": 2, "frequency": 0.01, "amplitude": 0.0 },
     { "seed": 4, "frequency": 0.16, "amplitude": 0.0 },
     { "seed": 5, "frequency": 0.32, "amplitude": 0.0 }
