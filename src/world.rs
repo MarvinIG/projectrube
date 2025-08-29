@@ -241,12 +241,16 @@ enum BlockType {
     Grass,
     Dirt,
     Stone,
+    Wood,
+    Leaf,
 }
 
 const EMPTY: BlockType = BlockType::Empty;
 const GRASS: BlockType = BlockType::Grass;
 const DIRT: BlockType = BlockType::Dirt;
 const STONE: BlockType = BlockType::Stone;
+const WOOD: BlockType = BlockType::Wood;
+const LEAF: BlockType = BlockType::Leaf;
 
 impl Voxel for BlockType {
     fn get_visibility(&self) -> VoxelVisibility {
@@ -277,6 +281,18 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
 
     let shape = ConstShape3u32::<{ N }, { N }, { N }> {};
     let mut voxels = vec![EMPTY; (N * N * N) as usize];
+    let size_i32 = size as i32;
+
+    // helper closure to place blocks via world coordinates
+    let set_block = |voxels: &mut Vec<BlockType>, wx: i32, wy: i32, wz: i32, block: BlockType| {
+        let lx = ((wx - coord.x * CHUNK_SIZE) / lod as i32) + 1;
+        let ly = ((wy - coord.y * CHUNK_SIZE) / lod as i32) + 1;
+        let lz = ((wz - coord.z * CHUNK_SIZE) / lod as i32) + 1;
+        if lx >= 0 && lx <= size_i32 + 1 && ly >= 0 && ly <= size_i32 + 1 && lz >= 0 && lz <= size_i32 + 1 {
+            let idx = shape.linearize([lx as u32, ly as u32, lz as u32]) as usize;
+            voxels[idx] = block;
+        }
+    };
 
     // 2D terrain noise layers for varied heights
     let mut noises = Vec::new();
@@ -291,6 +307,19 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
     let mut cave = FastNoiseLite::with_seed(3);
     cave.set_noise_type(Some(NoiseType::Perlin));
     cave.set_frequency(Some(0.05));
+
+    // Noise for cliffs, boulders and trees
+    let mut cliff = FastNoiseLite::with_seed(99);
+    cliff.set_noise_type(Some(NoiseType::Perlin));
+    cliff.set_frequency(Some(0.01));
+
+    let mut boulder_noise = FastNoiseLite::with_seed(1337);
+    boulder_noise.set_noise_type(Some(NoiseType::Perlin));
+    boulder_noise.set_frequency(Some(0.02));
+
+    let mut tree_noise = FastNoiseLite::with_seed(4242);
+    tree_noise.set_noise_type(Some(NoiseType::Perlin));
+    tree_noise.set_frequency(Some(0.02));
 
     for z in 0..=size + 1 {
         for x in 0..=size + 1 {
@@ -307,11 +336,15 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
                     height += (val * amp) as i32;
                 }
             }
+            // additional ridged noise for cliffs
+            let ridge = cliff.get_noise_2d(wx as f32, wz as f32).abs();
+            height += (ridge * 20.0) as i32;
             let height = height.clamp(1, MAX_HEIGHT - 1) as i32;
+            let max_y = height + 8;
 
             for y in 1..=size + 1 {
                 let wy = coord.y * CHUNK_SIZE + ((y as i32 - 1) * lod as i32);
-                if wy > height {
+                if wy > max_y {
                     continue;
                 }
 
@@ -320,27 +353,64 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
 
                 for offset in (0..lod).rev() {
                     let sample_y = wy + offset as i32;
-                    if sample_y > height {
+                    if sample_y > max_y {
                         continue;
                     }
 
                     let noise = cave.get_noise_3d(wx as f32, sample_y as f32, wz as f32);
-                    if noise > 0.9 {
-                        continue; // carve cave
-                    }
-
-                    block = if sample_y == height {
-                        GRASS
-                    } else if sample_y == height - 1 {
-                        DIRT
+                    if sample_y <= height {
+                        if noise > 0.9 {
+                            continue;
+                        }
+                        block = if sample_y == height {
+                            GRASS
+                        } else if sample_y == height - 1 {
+                            DIRT
+                        } else {
+                            STONE
+                        };
+                    } else if noise < -0.3 {
+                        block = STONE;
                     } else {
-                        STONE
-                    };
+                        continue;
+                    }
                     break;
                 }
 
                 if block != EMPTY {
                     voxels[idx] = block;
+                }
+            }
+
+            if lod == 1 {
+                let b_val = boulder_noise.get_noise_2d(wx as f32, wz as f32);
+                let t_val = tree_noise.get_noise_2d(wx as f32, wz as f32);
+                if b_val > 0.75 {
+                    let radius = 1 + ((b_val - 0.75) * 4.0) as i32;
+                    for by in 0..=radius {
+                        for bx in -radius..=radius {
+                            for bz in -radius..=radius {
+                                if bx * bx + by * by + bz * bz <= radius * radius {
+                                    set_block(&mut voxels, wx + bx, height + by, wz + bz, STONE);
+                                }
+                            }
+                        }
+                    }
+                } else if t_val > 0.6 {
+                    let trunk_h = 4 + ((t_val - 0.6) * 5.0) as i32;
+                    for ty in 1..=trunk_h {
+                        set_block(&mut voxels, wx, height + ty, wz, WOOD);
+                    }
+                    let top = height + trunk_h;
+                    for dx in -2..=2 {
+                        for dz in -2..=2 {
+                            for dy in 0..=2 {
+                                if dx * dx + dz * dz + dy * dy <= 9 {
+                                    set_block(&mut voxels, wx + dx, top + dy, wz + dz, LEAF);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -383,6 +453,8 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
                 GRASS => [0.1, 0.8, 0.1, 1.0],
                 DIRT => [0.55, 0.27, 0.07, 1.0],
                 STONE => [0.6, 0.6, 0.6, 1.0],
+                WOOD => [0.55, 0.27, 0.07, 1.0],
+                LEAF => [0.2, 0.6, 0.2, 1.0],
                 _ => [1.0, 1.0, 1.0, 1.0],
             };
             colors.extend_from_slice(&[color; 4]);
