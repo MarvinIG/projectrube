@@ -20,7 +20,7 @@ use crate::state::AppState;
 /// Size of one cubic chunk edge in blocks.
 pub const CHUNK_SIZE: i32 = 32;
 /// Maximum vertical height of the world in blocks.
-pub const MAX_HEIGHT: i32 = 128;
+pub const MAX_HEIGHT: i32 = 256;
 
 const CHUNK_SIZE_U32: u32 = CHUNK_SIZE as u32;
 const LOD2_SIZE_U32: u32 = CHUNK_SIZE_U32 / 2;
@@ -128,38 +128,41 @@ fn spawn_required_chunks(
     }
 
     // Queue missing chunks for generation
+    let vertical_chunks = MAX_HEIGHT / CHUNK_SIZE;
     for x in -params.view_width..=params.view_width {
         for z in -params.view_width..=params.view_width {
-            let coord = player_chunk + IVec3::new(x, 0, z);
             let dist = x.abs().max(z.abs());
             let required_lod = if dist <= 3 { 1 } else { 2 };
+            for y in 0..vertical_chunks {
+                let coord = player_chunk + IVec3::new(x, y, z);
 
-            if let Some(&entity) = map.entities.get(&coord) {
-                if let Ok(chunk) = chunks.get(entity) {
-                    if chunk.lod != required_lod {
-                        commands.entity(entity).despawn();
-                        map.entities.remove(&coord);
+                if let Some(&entity) = map.entities.get(&coord) {
+                    if let Ok(chunk) = chunks.get(entity) {
+                        if chunk.lod != required_lod {
+                            commands.entity(entity).despawn();
+                            map.entities.remove(&coord);
+                        } else {
+                            continue;
+                        }
                     } else {
                         continue;
                     }
-                } else {
-                    continue;
                 }
-            }
 
-            if let Some((lod, _)) = pending.tasks.get(&coord) {
-                if *lod == required_lod {
-                    continue;
+                if let Some((lod, _)) = pending.tasks.get(&coord) {
+                    if *lod == required_lod {
+                        continue;
+                    }
+                    pending.tasks.remove(&coord);
                 }
-                pending.tasks.remove(&coord);
-            }
 
-            let settings = settings.clone();
-            let task = pool.spawn(async move {
-                let mesh = generate_chunk_mesh(coord, required_lod, settings);
-                (coord, required_lod, mesh)
-            });
-            pending.tasks.insert(coord, (required_lod, task));
+                let settings = settings.clone();
+                let task = pool.spawn(async move {
+                    let mesh = generate_chunk_mesh(coord, required_lod, settings);
+                    (coord, required_lod, mesh)
+                });
+                pending.tasks.insert(coord, (required_lod, task));
+            }
         }
     }
 }
@@ -288,17 +291,34 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
     cave.set_noise_type(Some(NoiseType::Perlin));
     cave.set_frequency(Some(0.05));
 
+    // Helper closure to sample the terrain height at a world position
+    let sample_height = |x: f32, z: f32| {
+        let mut h = 20.0;
+        for (noise, amp) in &noises {
+            h += noise.get_noise_2d(x, z) * amp;
+        }
+        h
+    };
+
     for z in 0..=size + 1 {
         for x in 0..=size + 1 {
             let wx = coord.x * CHUNK_SIZE + ((x as i32 - 1) * lod as i32);
             let wz = coord.z * CHUNK_SIZE + ((z as i32 - 1) * lod as i32);
 
-            let mut height = 20.0;
-            for (noise, amp) in &noises {
-                height += noise.get_noise_2d(wx as f32, wz as f32) * amp;
-            }
+            let mut height = if lod == 1 {
+                sample_height(wx as f32, wz as f32)
+            } else {
+                let offsets = [0.0, lod as f32];
+                let mut sum = 0.0;
+                for ox in offsets {
+                    for oz in offsets {
+                        sum += sample_height(wx as f32 + ox, wz as f32 + oz);
+                    }
+                }
+                sum / 4.0
+            };
             height = (height / 2.0).round() * 2.0; // create plateaus
-            let height = height.clamp(1.0, (CHUNK_SIZE - 1) as f32).round() as i32;
+            let height = height.clamp(1.0, (MAX_HEIGHT - 1) as f32).round() as i32;
 
             for y in 1..=size + 1 {
                 let wy = coord.y * CHUNK_SIZE + ((y as i32 - 1) * lod as i32);
@@ -354,7 +374,18 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
             normals.extend_from_slice(&face.quad_mesh_normals());
             indices.extend_from_slice(&face.quad_mesh_indices(start));
 
-            let voxel = voxels[shape.linearize(quad.minimum) as usize];
+            let normal = face.quad_mesh_normals()[0];
+            let mut min = quad.minimum;
+            if normal[0] > 0.0 {
+                min[0] -= 1;
+            }
+            if normal[1] > 0.0 {
+                min[1] -= 1;
+            }
+            if normal[2] > 0.0 {
+                min[2] -= 1;
+            }
+            let voxel = voxels[shape.linearize(min) as usize];
             let color = match voxel {
                 GRASS => [0.1, 0.8, 0.1, 1.0],
                 DIRT => [0.55, 0.27, 0.07, 1.0],
