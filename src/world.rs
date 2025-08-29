@@ -40,10 +40,6 @@ impl Default for WorldParams {
     }
 }
 
-/// Handle to the material used for all chunks.
-#[derive(Resource)]
-struct ChunkMaterial(pub Handle<StandardMaterial>);
-
 /// Mapping of generated chunk coordinates to entities.
 #[derive(Resource, Default)]
 struct ChunkMap {
@@ -58,7 +54,13 @@ struct ChunkMap {
 /// higher resolution.
 #[derive(Resource, Default)]
 struct PendingTasks {
-    tasks: HashMap<IVec3, (u32, Task<(IVec3, u32, Mesh)>)>,
+    tasks: HashMap<IVec3, (u32, Task<(IVec3, u32, Mesh, Vec<[f32; 4]>)>)>,
+}
+
+/// Cached top surface colors for generated chunks.
+#[derive(Resource, Default)]
+struct SurfaceCache {
+    colors: HashMap<IVec3, Vec<[f32; 4]>>,
 }
 
 /// Component tagging a chunk mesh entity.
@@ -68,6 +70,19 @@ pub struct Chunk {
     pub lod: u32,
 }
 
+/// Fade direction for cross-fading chunk meshes.
+enum FadeDir {
+    In,
+    Out,
+}
+
+/// Component driving a chunk's fade animation.
+#[derive(Component)]
+struct Fade {
+    timer: Timer,
+    dir: FadeDir,
+}
+
 /// Plugin managing world chunk generation and rendering.
 pub struct WorldPlugin;
 
@@ -75,26 +90,19 @@ impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ChunkMap>()
             .init_resource::<PendingTasks>()
-            .add_systems(OnEnter(AppState::Playing), setup_chunk_material)
+            .init_resource::<SurfaceCache>()
             .add_systems(
                 Update,
                 (
                     spawn_required_chunks,
                     process_chunk_tasks,
                     frustum_cull_chunks,
+                    fade_chunks,
                 )
                     .run_if(in_state(AppState::Playing)),
             )
             .add_systems(OnExit(AppState::Playing), cleanup_chunks);
     }
-}
-
-fn setup_chunk_material(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
-    let material = materials.add(StandardMaterial {
-        base_color: Color::WHITE,
-        ..default()
-    });
-    commands.insert_resource(ChunkMaterial(material));
 }
 
 fn spawn_required_chunks(
@@ -103,6 +111,7 @@ fn spawn_required_chunks(
     settings: Res<NoiseSettings>,
     mut pending: ResMut<PendingTasks>,
     mut map: ResMut<ChunkMap>,
+    mut cache: ResMut<SurfaceCache>,
     player: Query<&Transform, With<PlayerCam>>,
     chunks: Query<&Chunk>,
 ) {
@@ -127,6 +136,7 @@ fn spawn_required_chunks(
     }
     for coord in to_remove {
         map.entities.remove(&coord);
+        cache.colors.remove(&coord);
     }
 
     // Queue missing chunks for generation
@@ -139,10 +149,7 @@ fn spawn_required_chunks(
 
                 if let Some(&entity) = map.entities.get(&coord) {
                     if let Ok(chunk) = chunks.get(entity) {
-                        if chunk.lod != required_lod {
-                            commands.entity(entity).despawn();
-                            map.entities.remove(&coord);
-                        } else {
+                        if chunk.lod == required_lod {
                             continue;
                         }
                     } else {
@@ -158,9 +165,11 @@ fn spawn_required_chunks(
                 }
 
                 let settings = settings.clone();
+                let cached = cache.colors.get(&coord).cloned();
                 let task = pool.spawn(async move {
-                    let mesh = generate_chunk_mesh(coord, required_lod, settings);
-                    (coord, required_lod, mesh)
+                    let (mesh, surface) =
+                        generate_chunk_mesh(coord, required_lod, settings, cached);
+                    (coord, required_lod, mesh, surface)
                 });
                 pending.tasks.insert(coord, (required_lod, task));
             }
@@ -173,16 +182,24 @@ fn process_chunk_tasks(
     mut pending: ResMut<PendingTasks>,
     mut map: ResMut<ChunkMap>,
     mut meshes: ResMut<Assets<Mesh>>,
-    material: Res<ChunkMaterial>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cache: ResMut<SurfaceCache>,
 ) {
     let mut finished = Vec::new();
     for (coord, (_lod, task)) in pending.tasks.iter_mut() {
-        if let Some((c, lod, mesh)) = future::block_on(future::poll_once(task)) {
+        if let Some((c, lod, mesh, surface)) = future::block_on(future::poll_once(task)) {
             let handle = meshes.add(mesh);
+            let old = map.entities.get(&c).copied();
+            let alpha = if old.is_some() { 0.0 } else { 1.0 };
+            let mat_handle = materials.add(StandardMaterial {
+                base_color: Color::srgba(1.0, 1.0, 1.0, alpha),
+                alpha_mode: AlphaMode::Blend,
+                ..default()
+            });
             let entity = commands
                 .spawn((
                     Mesh3d(handle),
-                    MeshMaterial3d(material.0.clone()),
+                    MeshMaterial3d(mat_handle.clone()),
                     Transform::from_xyz(
                         c.x as f32 * CHUNK_SIZE as f32,
                         c.y as f32 * CHUNK_SIZE as f32,
@@ -193,6 +210,18 @@ fn process_chunk_tasks(
                 ))
                 .id();
             map.entities.insert(c, entity);
+
+            if let Some(old_entity) = old {
+                commands.entity(entity).insert(Fade {
+                    timer: Timer::from_seconds(0.5, TimerMode::Once),
+                    dir: FadeDir::In,
+                });
+                commands.entity(old_entity).insert(Fade {
+                    timer: Timer::from_seconds(0.5, TimerMode::Once),
+                    dir: FadeDir::Out,
+                });
+            }
+            cache.colors.insert(c, surface);
             finished.push(*coord);
         }
     }
@@ -206,12 +235,14 @@ fn cleanup_chunks(
     chunks: Query<Entity, With<Chunk>>,
     mut map: ResMut<ChunkMap>,
     mut pending: ResMut<PendingTasks>,
+    mut cache: ResMut<SurfaceCache>,
 ) {
     for e in &chunks {
         commands.entity(e).despawn();
     }
     map.entities.clear();
     pending.tasks.clear();
+    cache.colors.clear();
 }
 
 fn frustum_cull_chunks(
@@ -230,6 +261,35 @@ fn frustum_cull_chunks(
         } else {
             Visibility::Hidden
         };
+    }
+}
+
+fn fade_chunks(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut q: Query<(Entity, &mut Fade, &MeshMaterial3d<StandardMaterial>)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (e, mut fade, mat_handle) in &mut q {
+        if let Some(mat) = materials.get_mut(&mat_handle.0) {
+            fade.timer.tick(time.delta());
+            let t = fade.timer.fraction();
+            let a = match fade.dir {
+                FadeDir::In => t,
+                FadeDir::Out => 1.0 - t,
+            };
+            mat.base_color = mat.base_color.with_alpha(a);
+            if fade.timer.finished() {
+                match fade.dir {
+                    FadeDir::In => {
+                        commands.entity(e).remove::<Fade>();
+                    }
+                    FadeDir::Out => {
+                        commands.entity(e).despawn();
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -264,19 +324,32 @@ impl MergeVoxel for BlockType {
     }
 }
 
-fn generate_chunk_mesh(coord: IVec3, lod: u32, settings: NoiseSettings) -> Mesh {
+fn generate_chunk_mesh(
+    coord: IVec3,
+    lod: u32,
+    settings: NoiseSettings,
+    surface: Option<Vec<[f32; 4]>>,
+) -> (Mesh, Vec<[f32; 4]>) {
     match lod {
-        1 => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, lod, &settings),
-        2 => build_mesh::<{ LOD2_SIZE_U32 + 3 }>(coord, lod, &settings),
-        _ => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, 1, &settings),
+        1 => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, lod, &settings, surface),
+        2 => build_mesh::<{ LOD2_SIZE_U32 + 3 }>(coord, lod, &settings, surface),
+        _ => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, 1, &settings, surface),
     }
 }
 
-fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) -> Mesh {
+fn build_mesh<const N: u32>(
+    coord: IVec3,
+    lod: u32,
+    settings: &NoiseSettings,
+    surface_in: Option<Vec<[f32; 4]>>,
+) -> (Mesh, Vec<[f32; 4]>) {
     let size = N - 2;
 
     let shape = ConstShape3u32::<{ N }, { N }, { N }> {};
     let mut voxels = vec![EMPTY; (N * N * N) as usize];
+
+    let mut surface_colors = surface_in
+        .unwrap_or_else(|| vec![[0.0, 0.0, 0.0, 1.0]; (CHUNK_SIZE_U32 * CHUNK_SIZE_U32) as usize]);
 
     // 2D terrain noise layers for varied heights
     let mut noises = Vec::new();
@@ -341,6 +414,19 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
 
                 if block != EMPTY {
                     voxels[idx] = block;
+                    if lod == 1 {
+                        if x > 0 && x <= size && z > 0 && z <= size && wy == height {
+                            let lx = x - 1;
+                            let lz = z - 1;
+                            let color = match block {
+                                GRASS => [0.1, 0.8, 0.1, 1.0],
+                                DIRT => [0.55, 0.27, 0.07, 1.0],
+                                STONE => [0.6, 0.6, 0.6, 1.0],
+                                _ => [1.0, 1.0, 1.0, 1.0],
+                            };
+                            surface_colors[(lx * CHUNK_SIZE_U32 + lz) as usize] = color;
+                        }
+                    }
                 }
             }
         }
@@ -379,11 +465,17 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
             indices.extend_from_slice(&face.quad_mesh_indices(start));
 
             let voxel = voxels[shape.linearize(quad.minimum) as usize];
-            let color = match voxel {
-                GRASS => [0.1, 0.8, 0.1, 1.0],
-                DIRT => [0.55, 0.27, 0.07, 1.0],
-                STONE => [0.6, 0.6, 0.6, 1.0],
-                _ => [1.0, 1.0, 1.0, 1.0],
+            let color = if lod == 1 {
+                match voxel {
+                    GRASS => [0.1, 0.8, 0.1, 1.0],
+                    DIRT => [0.55, 0.27, 0.07, 1.0],
+                    STONE => [0.6, 0.6, 0.6, 1.0],
+                    _ => [1.0, 1.0, 1.0, 1.0],
+                }
+            } else {
+                let lx = quad.minimum[0] - 1;
+                let lz = quad.minimum[2] - 1;
+                surface_colors[(lx * CHUNK_SIZE_U32 + lz) as usize]
             };
             colors.extend_from_slice(&[color; 4]);
         }
@@ -399,5 +491,5 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
-    mesh
+    (mesh, surface_colors)
 }

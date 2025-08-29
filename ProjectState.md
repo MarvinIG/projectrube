@@ -13,6 +13,7 @@
 - Pressing `P` in-game returns to the title screen and removes active world entities.
 - Chunks retain full detail within an eight-chunk radius, and distant low-detail meshes sample the surface block so colors remain accurate when approached.
 - Chunks now spawn in stacked vertical layers up to eight chunks high, enabling a fully 3D world grid.
+- LOD swaps cross-fade between chunk meshes to reduce visible popping, and per-chunk surface colors are cached to speed LOD toggling.
 
 ## WIP
 - None
