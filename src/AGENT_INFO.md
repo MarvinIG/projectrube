@@ -15,3 +15,4 @@
 - Tuned noise amplitudes for varied hills and corrected mesh offset so all block faces render.
 - Added menu controls for five stacked terrain noise layers, editable and persisted to `settings.json` with the `L` key.
 - Pressing `P` during gameplay returns to the title screen and cleans up the world and player entities.
+- Chunk generation now spans the vertical axis, spawning up to eight stacked chunk layers for a full 3D grid.

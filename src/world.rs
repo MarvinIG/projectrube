@@ -20,7 +20,9 @@ use crate::state::AppState;
 /// Size of one cubic chunk edge in blocks.
 pub const CHUNK_SIZE: i32 = 32;
 /// Maximum vertical height of the world in blocks.
-pub const MAX_HEIGHT: i32 = 128;
+pub const MAX_HEIGHT: i32 = 256;
+/// Number of vertical chunks making up the world height.
+pub const MAX_CHUNKS_Y: i32 = MAX_HEIGHT / CHUNK_SIZE;
 
 const CHUNK_SIZE_U32: u32 = CHUNK_SIZE as u32;
 const LOD2_SIZE_U32: u32 = CHUNK_SIZE_U32 / 2;
@@ -108,7 +110,7 @@ fn spawn_required_chunks(
     let player_pos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
     let player_chunk = IVec3::new(
         (player_pos.x / CHUNK_SIZE as f32).floor() as i32,
-        0,
+        (player_pos.y / CHUNK_SIZE as f32).floor() as i32,
         (player_pos.z / CHUNK_SIZE as f32).floor() as i32,
     );
 
@@ -130,9 +132,10 @@ fn spawn_required_chunks(
     // Queue missing chunks for generation
     for x in -params.view_width..=params.view_width {
         for z in -params.view_width..=params.view_width {
-            let coord = player_chunk + IVec3::new(x, 0, z);
             let dist = x.abs().max(z.abs());
             let required_lod = if dist <= 3 { 1 } else { 2 };
+            for y in 0..MAX_CHUNKS_Y {
+                let coord = IVec3::new(player_chunk.x + x, y, player_chunk.z + z);
 
             if let Some(&entity) = map.entities.get(&coord) {
                 if let Ok(chunk) = chunks.get(entity) {
@@ -154,12 +157,13 @@ fn spawn_required_chunks(
                 pending.tasks.remove(&coord);
             }
 
-            let settings = settings.clone();
-            let task = pool.spawn(async move {
-                let mesh = generate_chunk_mesh(coord, required_lod, settings);
-                (coord, required_lod, mesh)
-            });
-            pending.tasks.insert(coord, (required_lod, task));
+                let settings = settings.clone();
+                let task = pool.spawn(async move {
+                    let mesh = generate_chunk_mesh(coord, required_lod, settings);
+                    (coord, required_lod, mesh)
+                });
+                pending.tasks.insert(coord, (required_lod, task));
+            }
         }
     }
 }
