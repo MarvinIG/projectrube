@@ -7,13 +7,11 @@
 - Corrected Perlin noise frequency so terrain heights vary properly.
 - Refactored gameplay, menu, player controls, and world resources into separate modules to slim down `main.rs`.
 - Stacked multiple 2D Perlin noise layers for wide-spread terrain variation.
-- Reintroduced 3D Perlin noise to carve sparse caves and cliffs while adding hills and plateaus.
+- Reintroduced 3D Perlin noise to carve sparse caves and cliffs while adding hills
 - Switched to chunk-based world generation using 32×32×32 chunks with a configurable view width radius (default 4) and a maximum height of 256 blocks.
-- Stacked vertical chunk columns from y=0 to y=256 so the world is generated across the full height range.
 - Added multithreaded infinite chunk streaming with greedy meshing, frustum culling, and distance-based LOD.
 - Fixed chunk gap bug by generating neighbor border voxels and upgrading nearby chunks to full resolution.
 - Colored voxels: top blocks render green, subsoil brown, and underground stone gray.
 - Tuned noise amplitudes for varied hills and corrected mesh offset so all block faces render.
 - Added menu controls for five stacked terrain noise layers, editable and persisted to `settings.json` with the `L` key.
 - Pressing `P` during gameplay returns to the title screen and cleans up the world and player entities.
-- Far LOD chunks now average terrain heights and adjust voxel color sampling so distant terrain matches the blocks generated up close.

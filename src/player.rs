@@ -56,7 +56,7 @@ pub fn keyboard_move(
             direction -= Vec3::Y;
         }
         if direction.length_squared() > 0.0 {
-            let speed = 5.0;
+            let speed = 25.0;
             transform.translation += direction.normalize() * speed * time.delta_secs();
         }
     }
