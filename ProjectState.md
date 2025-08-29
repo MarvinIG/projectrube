@@ -12,6 +12,7 @@
 - Terrain height now stacks five configurable noise layers adjustable from the title screen and saved to `settings.json`.
 - Pressing `P` in-game returns to the title screen and removes active world entities.
 - Distant low-detail chunks now approximate height variations and display the correct block colors so terrain matches when approached.
+- Chunks now spawn in stacked vertical layers up to eight chunks high, enabling a fully 3D world grid.
 
 ## WIP
 - None
