@@ -321,7 +321,7 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
 
     let mut boulder_noise = FastNoiseLite::with_seed(1337);
     boulder_noise.set_noise_type(Some(NoiseType::Perlin));
-    boulder_noise.set_frequency(Some(0.02));
+    boulder_noise.set_frequency(Some(0.001));
 
     let mut tree_density = FastNoiseLite::with_seed(4242);
     tree_density.set_noise_type(Some(NoiseType::Perlin));
@@ -369,7 +369,7 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
 
                     let noise = cave.get_noise_3d(wx as f32, sample_y as f32, wz as f32);
                     if sample_y <= height {
-                        if noise > 0.9 {
+                        if noise > 0.8 {
                             continue;
                         }
                         block = if sample_y == height {
@@ -379,8 +379,8 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
                         } else {
                             STONE
                         };
-                    } else if noise < -0.3 {
-                        block = STONE;
+                    } else if noise < -0.8 {
+                        //block = STONE; keep this of for now, its buggy!
                     } else {
                         continue;
                     }
@@ -396,7 +396,7 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
                 let b_val = boulder_noise.get_noise_2d(wx as f32, wz as f32);
                 let density = (tree_density.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
                 let scatter = (tree_scatter.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
-                if b_val > 0.9 {
+                if b_val > 0.2 {
                     let radius = 1 + ((b_val - 0.9) * 10.0) as i32;
                     for by in 0..=radius {
                         for bx in -radius..=radius {
