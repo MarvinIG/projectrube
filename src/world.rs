@@ -133,7 +133,7 @@ fn spawn_required_chunks(
     for x in -params.view_width..=params.view_width {
         for z in -params.view_width..=params.view_width {
             let dist = x.abs().max(z.abs());
-            let required_lod = if dist <= 3 { 1 } else { 2 };
+            let required_lod = if dist <= 8 { 1 } else { 2 };
             for y in 0..MAX_CHUNKS_Y {
                 let coord = IVec3::new(player_chunk.x + x, y, player_chunk.z + z);
 
@@ -315,18 +315,33 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
                     continue;
                 }
 
-                let noise = cave.get_noise_3d(wx as f32, wy as f32, wz as f32);
-                if noise > 0.9 {
-                    continue; // carve cave
-                }
                 let idx = shape.linearize([x, y, z]) as usize;
-                voxels[idx] = if wy == height {
-                    GRASS
-                } else if wy == height - 1 {
-                    DIRT
-                } else {
-                    STONE
-                };
+                let mut block = EMPTY;
+
+                for offset in (0..lod).rev() {
+                    let sample_y = wy + offset as i32;
+                    if sample_y > height {
+                        continue;
+                    }
+
+                    let noise = cave.get_noise_3d(wx as f32, sample_y as f32, wz as f32);
+                    if noise > 0.9 {
+                        continue; // carve cave
+                    }
+
+                    block = if sample_y == height {
+                        GRASS
+                    } else if sample_y == height - 1 {
+                        DIRT
+                    } else {
+                        STONE
+                    };
+                    break;
+                }
+
+                if block != EMPTY {
+                    voxels[idx] = block;
+                }
             }
         }
     }

@@ -16,3 +16,4 @@
 - Added menu controls for five stacked terrain noise layers, editable and persisted to `settings.json` with the `L` key.
 - Pressing `P` during gameplay returns to the title screen and cleans up the world and player entities.
 - Chunk generation now spans the vertical axis, spawning up to eight stacked chunk layers for a full 3D grid.
+- Reduced-detail chunk rendering now begins beyond eight chunks from the player and samples the top surface block so distant terrain colors stay accurate.

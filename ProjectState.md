@@ -11,7 +11,7 @@
 - Terrain noise retuned for noticeable hills and plateaus, and chunk mesh positions corrected so all faces render.
 - Terrain height now stacks five configurable noise layers adjustable from the title screen and saved to `settings.json`.
 - Pressing `P` in-game returns to the title screen and removes active world entities.
-- Distant low-detail chunks now approximate height variations and display the correct block colors so terrain matches when approached.
+- Chunks retain full detail within an eight-chunk radius, and distant low-detail meshes sample the surface block so colors remain accurate when approached.
 - Chunks now spawn in stacked vertical layers up to eight chunks high, enabling a fully 3D world grid.
 
 ## WIP
