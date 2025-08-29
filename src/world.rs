@@ -133,7 +133,7 @@ fn spawn_required_chunks(
     for x in -params.view_width..=params.view_width {
         for z in -params.view_width..=params.view_width {
             let dist = x.abs().max(z.abs());
-            let required_lod = if dist <= 8 { 1 } else { 2 };
+            let required_lod = if dist <= 6 { 1 } else { 2 };
             for y in 0..MAX_CHUNKS_Y {
                 let coord = IVec3::new(player_chunk.x + x, y, player_chunk.z + z);
 
