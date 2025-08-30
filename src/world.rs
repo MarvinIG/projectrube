@@ -16,6 +16,7 @@ use futures_lite::future;
 use crate::player::PlayerCam;
 use crate::settings::NoiseSettings;
 use crate::state::AppState;
+use std::sync::{Arc, Mutex};
 
 /// Size of one cubic chunk edge in blocks.
 pub const CHUNK_SIZE: i32 = 32;
@@ -61,6 +62,9 @@ struct PendingTasks {
     tasks: HashMap<IVec3, (u32, Task<(IVec3, u32, Mesh)>)>,
 }
 
+#[derive(Resource, Default)]
+struct LastChunk(pub Option<IVec3>);
+
 /// Component tagging a chunk mesh entity.
 #[derive(Component)]
 pub struct Chunk {
@@ -75,7 +79,15 @@ impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ChunkMap>()
             .init_resource::<PendingTasks>()
-            .add_systems(OnEnter(AppState::Playing), setup_chunk_material)
+            .init_resource::<LastChunk>()
+            .add_systems(
+                OnEnter(AppState::Playing),
+                (
+                    setup_chunk_material,
+                    setup_noise_resources,
+                    reset_player_chunk,
+                ),
+            )
             .add_systems(
                 Update,
                 (
@@ -97,14 +109,86 @@ fn setup_chunk_material(mut commands: Commands, mut materials: ResMut<Assets<Sta
     commands.insert_resource(ChunkMaterial(material));
 }
 
+#[derive(Resource, Clone)]
+struct NoiseResources {
+    layers: Vec<(Arc<Mutex<FastNoiseLite>>, f32)>,
+    cave: Arc<Mutex<FastNoiseLite>>,
+    cliff: Arc<Mutex<FastNoiseLite>>,
+    boulder_density: Arc<Mutex<FastNoiseLite>>,
+    boulder_scatter: Arc<Mutex<FastNoiseLite>>,
+    boulder_shape: Arc<Mutex<FastNoiseLite>>,
+    tree_density: Arc<Mutex<FastNoiseLite>>,
+    tree_scatter: Arc<Mutex<FastNoiseLite>>,
+}
+
+impl NoiseResources {
+    fn from_settings(settings: &NoiseSettings) -> Self {
+        let mut layers = Vec::new();
+        for layer in &settings.layers {
+            let mut n = FastNoiseLite::with_seed(layer.seed);
+            n.set_noise_type(Some(NoiseType::Perlin));
+            n.set_frequency(Some(layer.frequency));
+            layers.push((Arc::new(Mutex::new(n)), layer.amplitude));
+        }
+
+        let mut cave = FastNoiseLite::with_seed(3);
+        cave.set_noise_type(Some(NoiseType::Perlin));
+        cave.set_frequency(Some(0.05));
+
+        let mut cliff = FastNoiseLite::with_seed(99);
+        cliff.set_noise_type(Some(NoiseType::Perlin));
+        cliff.set_frequency(Some(0.01));
+
+        let mut boulder_density = FastNoiseLite::with_seed(1337);
+        boulder_density.set_noise_type(Some(NoiseType::Perlin));
+        boulder_density.set_frequency(Some(0.003));
+
+        let mut boulder_scatter = FastNoiseLite::with_seed(1338);
+        boulder_scatter.set_noise_type(Some(NoiseType::Perlin));
+        boulder_scatter.set_frequency(Some(0.08));
+
+        let mut boulder_shape = FastNoiseLite::with_seed(1339);
+        boulder_shape.set_noise_type(Some(NoiseType::Perlin));
+        boulder_shape.set_frequency(Some(0.3));
+
+        let mut tree_density = FastNoiseLite::with_seed(4242);
+        tree_density.set_noise_type(Some(NoiseType::Perlin));
+        tree_density.set_frequency(Some(0.005));
+
+        let mut tree_scatter = FastNoiseLite::with_seed(4243);
+        tree_scatter.set_noise_type(Some(NoiseType::Perlin));
+        tree_scatter.set_frequency(Some(0.1));
+
+        Self {
+            layers,
+            cave: Arc::new(Mutex::new(cave)),
+            cliff: Arc::new(Mutex::new(cliff)),
+            boulder_density: Arc::new(Mutex::new(boulder_density)),
+            boulder_scatter: Arc::new(Mutex::new(boulder_scatter)),
+            boulder_shape: Arc::new(Mutex::new(boulder_shape)),
+            tree_density: Arc::new(Mutex::new(tree_density)),
+            tree_scatter: Arc::new(Mutex::new(tree_scatter)),
+        }
+    }
+}
+
+fn setup_noise_resources(mut commands: Commands, settings: Res<NoiseSettings>) {
+    commands.insert_resource(NoiseResources::from_settings(&settings));
+}
+
+fn reset_player_chunk(mut last_chunk: ResMut<LastChunk>) {
+    last_chunk.0 = None;
+}
+
 fn spawn_required_chunks(
     mut commands: Commands,
     params: Res<WorldParams>,
-    settings: Res<NoiseSettings>,
+    noise: Res<NoiseResources>,
     mut pending: ResMut<PendingTasks>,
     mut map: ResMut<ChunkMap>,
     player: Query<&Transform, With<PlayerCam>>,
     chunks: Query<&Chunk>,
+    mut last_chunk: ResMut<LastChunk>,
 ) {
     let pool = AsyncComputeTaskPool::get();
     let player_pos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
@@ -113,6 +197,10 @@ fn spawn_required_chunks(
         (player_pos.y / CHUNK_SIZE as f32).floor() as i32,
         (player_pos.z / CHUNK_SIZE as f32).floor() as i32,
     );
+
+    if last_chunk.0.map_or(false, |c| c == player_chunk) {
+        return;
+    }
 
     // Despawn chunks far outside the view radius
     let mut to_remove = Vec::new();
@@ -157,15 +245,17 @@ fn spawn_required_chunks(
                     pending.tasks.remove(&coord);
                 }
 
-                let settings = settings.clone();
+                let noise = noise.clone();
                 let task = pool.spawn(async move {
-                    let mesh = generate_chunk_mesh(coord, required_lod, settings);
+                    let mesh = generate_chunk_mesh(coord, required_lod, &noise);
                     (coord, required_lod, mesh)
                 });
                 pending.tasks.insert(coord, (required_lod, task));
             }
         }
     }
+
+    last_chunk.0 = Some(player_chunk);
 }
 
 fn process_chunk_tasks(
@@ -268,23 +358,29 @@ impl MergeVoxel for BlockType {
     }
 }
 
-fn generate_chunk_mesh(coord: IVec3, lod: u32, settings: NoiseSettings) -> Mesh {
+fn generate_chunk_mesh(coord: IVec3, lod: u32, noise: &NoiseResources) -> Mesh {
     match lod {
-        1 => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, lod, &settings),
-        2 => build_mesh::<{ LOD2_SIZE_U32 + 3 }>(coord, lod, &settings),
-        _ => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, 1, &settings),
+        1 => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, lod, noise),
+        2 => build_mesh::<{ LOD2_SIZE_U32 + 3 }>(coord, lod, noise),
+        _ => build_mesh::<{ CHUNK_SIZE_U32 + 3 }>(coord, 1, noise),
     }
 }
 
-fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) -> Mesh {
+fn build_mesh<const N: u32>(coord: IVec3, lod: u32, resources: &NoiseResources) -> Mesh {
     let size = N - 2;
 
     let shape = ConstShape3u32::<{ N }, { N }, { N }> {};
     let mut voxels = vec![EMPTY; (N * N * N) as usize];
     let size_i32 = size as i32;
+    let occ_stride = size as i32;
+    let mut occupancy = vec![i32::MIN; (size * size) as usize];
 
-    // helper closure to place blocks via world coordinates
-    let set_block = |voxels: &mut Vec<BlockType>, wx: i32, wy: i32, wz: i32, block: BlockType| {
+    let set_block = |voxels: &mut Vec<BlockType>,
+                     wx: i32,
+                     wy: i32,
+                     wz: i32,
+                     block: BlockType,
+                     occupancy: &mut Vec<i32>| {
         let lx = ((wx - coord.x * CHUNK_SIZE) / lod as i32) + 1;
         let ly = ((wy - coord.y * CHUNK_SIZE) / lod as i32) + 1;
         let lz = ((wz - coord.z * CHUNK_SIZE) / lod as i32) + 1;
@@ -297,65 +393,26 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
         {
             let idx = shape.linearize([lx as u32, ly as u32, lz as u32]) as usize;
             voxels[idx] = block;
+            if block != EMPTY {
+                let ox = lx - 1;
+                let oz = lz - 1;
+                if ox >= 0 && ox < occ_stride && oz >= 0 && oz < occ_stride {
+                    let occ = (ox + oz * occ_stride) as usize;
+                    if wy > occupancy[occ] {
+                        occupancy[occ] = wy;
+                    }
+                }
+            }
         }
     };
 
-    let get_block = |voxels: &Vec<BlockType>, wx: i32, wy: i32, wz: i32| -> BlockType {
-        let lx = ((wx - coord.x * CHUNK_SIZE) / lod as i32) + 1;
-        let ly = ((wy - coord.y * CHUNK_SIZE) / lod as i32) + 1;
-        let lz = ((wz - coord.z * CHUNK_SIZE) / lod as i32) + 1;
-        if lx >= 0
-            && lx <= size_i32 + 1
-            && ly >= 0
-            && ly <= size_i32 + 1
-            && lz >= 0
-            && lz <= size_i32 + 1
-        {
-            let idx = shape.linearize([lx as u32, ly as u32, lz as u32]) as usize;
-            voxels[idx]
-        } else {
-            EMPTY
-        }
-    };
-
-    // 2D terrain noise layers for varied heights
-    let mut noises = Vec::new();
-    for layer in &settings.layers {
-        let mut n = FastNoiseLite::with_seed(layer.seed);
-        n.set_noise_type(Some(NoiseType::Perlin));
-        n.set_frequency(Some(layer.frequency));
-        noises.push((n, layer.amplitude));
-    }
-
-    // 3D noise for sparse caves and cliffs
-    let mut cave = FastNoiseLite::with_seed(3);
-    cave.set_noise_type(Some(NoiseType::Perlin));
-    cave.set_frequency(Some(0.05));
-
-    // Noise for cliffs, boulders and trees
-    let mut cliff = FastNoiseLite::with_seed(99);
-    cliff.set_noise_type(Some(NoiseType::Perlin));
-    cliff.set_frequency(Some(0.01));
-
-    let mut boulder_density = FastNoiseLite::with_seed(1337);
-    boulder_density.set_noise_type(Some(NoiseType::Perlin));
-    boulder_density.set_frequency(Some(0.003));
-
-    let mut boulder_scatter = FastNoiseLite::with_seed(1338);
-    boulder_scatter.set_noise_type(Some(NoiseType::Perlin));
-    boulder_scatter.set_frequency(Some(0.08));
-
-    let mut boulder_shape = FastNoiseLite::with_seed(1339);
-    boulder_shape.set_noise_type(Some(NoiseType::Perlin));
-    boulder_shape.set_frequency(Some(0.3));
-
-    let mut tree_density = FastNoiseLite::with_seed(4242);
-    tree_density.set_noise_type(Some(NoiseType::Perlin));
-    tree_density.set_frequency(Some(0.005));
-
-    let mut tree_scatter = FastNoiseLite::with_seed(4243);
-    tree_scatter.set_noise_type(Some(NoiseType::Perlin));
-    tree_scatter.set_frequency(Some(0.1));
+    let cave = &resources.cave;
+    let cliff = &resources.cliff;
+    let boulder_density = &resources.boulder_density;
+    let boulder_scatter = &resources.boulder_scatter;
+    let boulder_shape = &resources.boulder_shape;
+    let tree_density = &resources.tree_density;
+    let tree_scatter = &resources.tree_scatter;
 
     for z in 0..=size + 1 {
         for x in 0..=size + 1 {
@@ -363,20 +420,37 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
             let wz = coord.z * CHUNK_SIZE + ((z as i32 - 1) * lod as i32);
 
             let mut height = 40;
-            if let Some((first_noise, first_amp)) = noises.first() {
-                let val = (first_noise.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
-                height += (val * first_amp) as i32;
+            if let Some((first_noise, first_amp)) = resources.layers.first() {
+                let val = {
+                    let mut n = first_noise.lock().unwrap();
+                    (n.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0
+                };
+                height += (val * *first_amp) as i32;
 
-                for (noise, amp) in &noises[1..] {
-                    let val = noise.get_noise_2d(wx as f32, wz as f32);
-                    height += (val * amp) as i32;
+                for (noise, amp) in resources.layers.iter().skip(1) {
+                    let val = {
+                        let mut n = noise.lock().unwrap();
+                        n.get_noise_2d(wx as f32, wz as f32)
+                    };
+                    height += (val * *amp) as i32;
                 }
             }
-            // additional ridged noise for cliffs
-            let ridge = cliff.get_noise_2d(wx as f32, wz as f32).abs();
+            let ridge = {
+                let mut c = cliff.lock().unwrap();
+                c.get_noise_2d(wx as f32, wz as f32).abs()
+            };
             height += (ridge * 20.0) as i32;
             let height = height.clamp(1, MAX_HEIGHT - 1) as i32;
             let max_y = height + 8;
+
+            if x >= 1 && x <= size && z >= 1 && z <= size {
+                let lx = x as i32 - 1;
+                let lz = z as i32 - 1;
+                let occ = (lx + lz * occ_stride) as usize;
+                if height > occupancy[occ] {
+                    occupancy[occ] = height;
+                }
+            }
 
             for y in 1..=size + 1 {
                 let wy = coord.y * CHUNK_SIZE + ((y as i32 - 1) * lod as i32);
@@ -393,7 +467,10 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
                         continue;
                     }
 
-                    let noise = cave.get_noise_3d(wx as f32, sample_y as f32, wz as f32);
+                    let noise = {
+                        let mut c = cave.lock().unwrap();
+                        c.get_noise_3d(wx as f32, sample_y as f32, wz as f32)
+                    };
                     if sample_y <= height {
                         if noise > 0.8 {
                             continue;
@@ -406,7 +483,7 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
                             STONE
                         };
                     } else if noise < -0.8 {
-                        //block = STONE; keep this of for now, its buggy!
+                        // block = STONE; keep this off for now, its buggy!
                     } else {
                         continue;
                     }
@@ -419,36 +496,59 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
             }
 
             if lod == 1 {
-                let t_density = (tree_density.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
-                let t_scatter = (tree_scatter.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
-                let b_density = (boulder_density.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
-                let b_scatter = (boulder_scatter.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
+                let t_density = {
+                    let mut n = tree_density.lock().unwrap();
+                    (n.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0
+                };
+                let t_scatter = {
+                    let mut n = tree_scatter.lock().unwrap();
+                    (n.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0
+                };
+                let b_density = {
+                    let mut n = boulder_density.lock().unwrap();
+                    (n.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0
+                };
+                let b_scatter = {
+                    let mut n = boulder_scatter.lock().unwrap();
+                    (n.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0
+                };
                 if b_scatter < b_density * b_density * 0.3 {
-                    let variant = (boulder_scatter
-                        .get_noise_2d(wx as f32 + 2000.0, wz as f32 + 2000.0)
-                        + 1.0)
-                        / 2.0;
+                    let variant = {
+                        let mut n = boulder_scatter.lock().unwrap();
+                        (n.get_noise_2d(wx as f32 + 2000.0, wz as f32 + 2000.0) + 1.0) / 2.0
+                    };
                     let radius = 1 + (variant * 3.0) as i32;
                     for by in 0..=radius {
                         for bx in -radius..=radius {
                             for bz in -radius..=radius {
-                                let shape = (boulder_shape.get_noise_3d(
-                                    (wx + bx) as f32 * 0.3,
-                                    (height + by) as f32 * 0.3,
-                                    (wz + bz) as f32 * 0.3,
-                                ) + 1.0)
-                                    / 2.0;
+                                let shape = {
+                                    let mut s = boulder_shape.lock().unwrap();
+                                    (s.get_noise_3d(
+                                        (wx + bx) as f32 * 0.3,
+                                        (height + by) as f32 * 0.3,
+                                        (wz + bz) as f32 * 0.3,
+                                    ) + 1.0)
+                                        / 2.0
+                                };
                                 let r = (radius as f32) * (0.7 + shape * 0.6);
                                 if (bx * bx + by * by + bz * bz) as f32 <= r * r {
-                                    set_block(&mut voxels, wx + bx, height + by, wz + bz, STONE);
+                                    set_block(
+                                        &mut voxels,
+                                        wx + bx,
+                                        height + by,
+                                        wz + bz,
+                                        STONE,
+                                        &mut occupancy,
+                                    );
                                 }
                             }
                         }
                     }
                 } else if t_scatter < t_density * t_density * 0.5 {
-                    let variant =
-                        (tree_scatter.get_noise_2d(wx as f32 + 1000.0, wz as f32 + 1000.0) + 1.0)
-                            / 2.0;
+                    let variant = {
+                        let mut n = tree_scatter.lock().unwrap();
+                        (n.get_noise_2d(wx as f32 + 1000.0, wz as f32 + 1000.0) + 1.0) / 2.0
+                    };
                     let trunk_size = (variant * 3.0).floor() as i32 + 1;
                     let trunk_h = 6 + trunk_size * 4 + (variant * 2.0) as i32;
                     let canopy = trunk_size * 2 + 2 + (variant * 2.0) as i32;
@@ -456,11 +556,15 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
                     let mut colliding = false;
                     'check: for tx in 0..trunk_size {
                         for tz in 0..trunk_size {
-                            for ty in 1..=trunk_h {
-                                if get_block(&voxels, wx + tx, height + ty, wz + tz) != EMPTY {
-                                    colliding = true;
-                                    break 'check;
-                                }
+                            let lx = ((wx + tx) - coord.x * CHUNK_SIZE) / lod as i32;
+                            let lz = ((wz + tz) - coord.z * CHUNK_SIZE) / lod as i32;
+                            if lx < 0 || lx >= occ_stride || lz < 0 || lz >= occ_stride {
+                                continue;
+                            }
+                            let occ = (lx + lz * occ_stride) as usize;
+                            if occupancy[occ] > height {
+                                colliding = true;
+                                break 'check;
                             }
                         }
                     }
@@ -471,7 +575,14 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
                     for ty in 1..=trunk_h {
                         for tx in 0..trunk_size {
                             for tz in 0..trunk_size {
-                                set_block(&mut voxels, wx + tx, height + ty, wz + tz, WOOD);
+                                set_block(
+                                    &mut voxels,
+                                    wx + tx,
+                                    height + ty,
+                                    wz + tz,
+                                    WOOD,
+                                    &mut occupancy,
+                                );
                             }
                         }
                     }
@@ -480,7 +591,14 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
                         for dz in -canopy..=canopy {
                             for dy in 0..=canopy {
                                 if dx * dx + dz * dz + dy * dy <= canopy * canopy {
-                                    set_block(&mut voxels, wx + dx, top + dy, wz + dz, LEAF);
+                                    set_block(
+                                        &mut voxels,
+                                        wx + dx,
+                                        top + dy,
+                                        wz + dz,
+                                        LEAF,
+                                        &mut occupancy,
+                                    );
                                 }
                             }
                         }
