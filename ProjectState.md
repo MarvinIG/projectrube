@@ -15,5 +15,7 @@
 - Chunks now spawn in stacked vertical layers up to eight chunks high, enabling a fully 3D world grid.
 - Ridged noise adds cliffs and overhangs while boulder generation now uses density and scatter noise with irregular shapes, and trees vary trunk size with collision-safe placement.
 
+- High-detail chunk meshes are cached ahead of time so low-precision chunks upgrade instantly without gaps, reducing regeneration stutter.
+
 ## WIP
 - None

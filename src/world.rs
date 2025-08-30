@@ -27,6 +27,11 @@ pub const MAX_CHUNKS_Y: i32 = MAX_HEIGHT / CHUNK_SIZE;
 const CHUNK_SIZE_U32: u32 = CHUNK_SIZE as u32;
 const LOD2_SIZE_U32: u32 = CHUNK_SIZE_U32 / 2;
 
+/// Distance in chunks within which high precision meshes are required.
+const LOD1_RADIUS: i32 = 6;
+/// Extra ring of chunks to cache at high precision for seamless swaps.
+const CACHE_BUFFER: i32 = 2;
+
 /// Runtime-configurable world generation parameters.
 #[derive(Resource)]
 pub struct WorldParams {
@@ -58,7 +63,13 @@ struct ChunkMap {
 /// higher resolution.
 #[derive(Resource, Default)]
 struct PendingTasks {
-    tasks: HashMap<IVec3, (u32, Task<(IVec3, u32, Mesh)>)>,
+    tasks: HashMap<(IVec3, u32), Task<(IVec3, u32, Mesh)>>,
+}
+
+/// Meshes generated ahead of time waiting to be swapped in.
+#[derive(Resource, Default)]
+struct ChunkCache {
+    meshes: HashMap<(IVec3, u32), Mesh>,
 }
 
 /// Component tagging a chunk mesh entity.
@@ -75,12 +86,14 @@ impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ChunkMap>()
             .init_resource::<PendingTasks>()
+            .init_resource::<ChunkCache>()
             .add_systems(OnEnter(AppState::Playing), setup_chunk_material)
             .add_systems(
                 Update,
                 (
                     spawn_required_chunks,
                     process_chunk_tasks,
+                    apply_cached_chunks,
                     frustum_cull_chunks,
                 )
                     .run_if(in_state(AppState::Playing)),
@@ -102,9 +115,12 @@ fn spawn_required_chunks(
     params: Res<WorldParams>,
     settings: Res<NoiseSettings>,
     mut pending: ResMut<PendingTasks>,
+    mut cache: ResMut<ChunkCache>,
     mut map: ResMut<ChunkMap>,
     player: Query<&Transform, With<PlayerCam>>,
     chunks: Query<&Chunk>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    material: Res<ChunkMaterial>,
 ) {
     let pool = AsyncComputeTaskPool::get();
     let player_pos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
@@ -133,36 +149,87 @@ fn spawn_required_chunks(
     for x in -params.view_width..=params.view_width {
         for z in -params.view_width..=params.view_width {
             let dist = x.abs().max(z.abs());
-            let required_lod = if dist <= 6 { 1 } else { 2 };
+            let required_lod = if dist <= LOD1_RADIUS { 1 } else { 2 };
             for y in 0..MAX_CHUNKS_Y {
                 let coord = IVec3::new(player_chunk.x + x, y, player_chunk.z + z);
 
                 if let Some(&entity) = map.entities.get(&coord) {
                     if let Ok(chunk) = chunks.get(entity) {
                         if chunk.lod != required_lod {
-                            commands.entity(entity).despawn();
-                            map.entities.remove(&coord);
-                        } else {
-                            continue;
+                            if let Some(mesh) = cache.meshes.remove(&(coord, required_lod)) {
+                                let handle = meshes.add(mesh);
+                                let new_e = commands
+                                    .spawn((
+                                        Mesh3d(handle),
+                                        MeshMaterial3d(material.0.clone()),
+                                        Transform::from_xyz(
+                                            coord.x as f32 * CHUNK_SIZE as f32,
+                                            coord.y as f32 * CHUNK_SIZE as f32,
+                                            coord.z as f32 * CHUNK_SIZE as f32,
+                                        ),
+                                        Visibility::default(),
+                                        Chunk {
+                                            coord,
+                                            lod: required_lod,
+                                        },
+                                    ))
+                                    .id();
+                                commands.entity(entity).despawn();
+                                map.entities.insert(coord, new_e);
+                            } else if !pending.tasks.contains_key(&(coord, required_lod)) {
+                                let settings = settings.clone();
+                                let task = pool.spawn(async move {
+                                    let mesh = generate_chunk_mesh(coord, required_lod, settings);
+                                    (coord, required_lod, mesh)
+                                });
+                                pending.tasks.insert((coord, required_lod), task);
+                            }
                         }
-                    } else {
-                        continue;
+                        // if lod matches, nothing to do
                     }
+                    continue;
                 }
 
-                if let Some((lod, _)) = pending.tasks.get(&coord) {
-                    if *lod == required_lod {
-                        continue;
-                    }
-                    pending.tasks.remove(&coord);
+                if let Some(mesh) = cache.meshes.remove(&(coord, required_lod)) {
+                    let handle = meshes.add(mesh);
+                    let entity = commands
+                        .spawn((
+                            Mesh3d(handle),
+                            MeshMaterial3d(material.0.clone()),
+                            Transform::from_xyz(
+                                coord.x as f32 * CHUNK_SIZE as f32,
+                                coord.y as f32 * CHUNK_SIZE as f32,
+                                coord.z as f32 * CHUNK_SIZE as f32,
+                            ),
+                            Visibility::default(),
+                            Chunk {
+                                coord,
+                                lod: required_lod,
+                            },
+                        ))
+                        .id();
+                    map.entities.insert(coord, entity);
+                } else if !pending.tasks.contains_key(&(coord, required_lod)) {
+                    let settings = settings.clone();
+                    let task = pool.spawn(async move {
+                        let mesh = generate_chunk_mesh(coord, required_lod, settings);
+                        (coord, required_lod, mesh)
+                    });
+                    pending.tasks.insert((coord, required_lod), task);
                 }
 
-                let settings = settings.clone();
-                let task = pool.spawn(async move {
-                    let mesh = generate_chunk_mesh(coord, required_lod, settings);
-                    (coord, required_lod, mesh)
-                });
-                pending.tasks.insert(coord, (required_lod, task));
+                if required_lod == 2 && dist <= LOD1_RADIUS + CACHE_BUFFER {
+                    if !pending.tasks.contains_key(&(coord, 1))
+                        && !cache.meshes.contains_key(&(coord, 1))
+                    {
+                        let settings = settings.clone();
+                        let task = pool.spawn(async move {
+                            let mesh = generate_chunk_mesh(coord, 1, settings);
+                            (coord, 1, mesh)
+                        });
+                        pending.tasks.insert((coord, 1), task);
+                    }
+                }
             }
         }
     }
@@ -171,33 +238,95 @@ fn spawn_required_chunks(
 fn process_chunk_tasks(
     mut commands: Commands,
     mut pending: ResMut<PendingTasks>,
+    mut cache: ResMut<ChunkCache>,
     mut map: ResMut<ChunkMap>,
     mut meshes: ResMut<Assets<Mesh>>,
     material: Res<ChunkMaterial>,
+    player: Query<&Transform, With<PlayerCam>>,
 ) {
+    let player_pos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
+    let player_chunk = IVec3::new(
+        (player_pos.x / CHUNK_SIZE as f32).floor() as i32,
+        (player_pos.y / CHUNK_SIZE as f32).floor() as i32,
+        (player_pos.z / CHUNK_SIZE as f32).floor() as i32,
+    );
+
     let mut finished = Vec::new();
-    for (coord, (_lod, task)) in pending.tasks.iter_mut() {
-        if let Some((c, lod, mesh)) = future::block_on(future::poll_once(task)) {
-            let handle = meshes.add(mesh);
-            let entity = commands
-                .spawn((
-                    Mesh3d(handle),
-                    MeshMaterial3d(material.0.clone()),
-                    Transform::from_xyz(
-                        c.x as f32 * CHUNK_SIZE as f32,
-                        c.y as f32 * CHUNK_SIZE as f32,
-                        c.z as f32 * CHUNK_SIZE as f32,
-                    ),
-                    Visibility::default(),
-                    Chunk { coord: c, lod },
-                ))
-                .id();
-            map.entities.insert(c, entity);
-            finished.push(*coord);
+    for ((coord, lod), task) in pending.tasks.iter_mut() {
+        if let Some((c, l, mesh)) = future::block_on(future::poll_once(task)) {
+            let dist = (c.x - player_chunk.x)
+                .abs()
+                .max((c.z - player_chunk.z).abs());
+            if l == 1 && dist > LOD1_RADIUS {
+                cache.meshes.insert((c, l), mesh);
+            } else {
+                let handle = meshes.add(mesh);
+                let entity = commands
+                    .spawn((
+                        Mesh3d(handle),
+                        MeshMaterial3d(material.0.clone()),
+                        Transform::from_xyz(
+                            c.x as f32 * CHUNK_SIZE as f32,
+                            c.y as f32 * CHUNK_SIZE as f32,
+                            c.z as f32 * CHUNK_SIZE as f32,
+                        ),
+                        Visibility::default(),
+                        Chunk { coord: c, lod: l },
+                    ))
+                    .id();
+                if let Some(old) = map.entities.insert(c, entity) {
+                    commands.entity(old).despawn();
+                }
+            }
+            finished.push((*coord, *lod));
         }
     }
-    for coord in finished {
-        pending.tasks.remove(&coord);
+    for key in finished {
+        pending.tasks.remove(&key);
+    }
+}
+
+fn apply_cached_chunks(
+    mut commands: Commands,
+    mut cache: ResMut<ChunkCache>,
+    mut map: ResMut<ChunkMap>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    material: Res<ChunkMaterial>,
+    player: Query<&Transform, With<PlayerCam>>,
+) {
+    let player_pos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
+    let player_chunk = IVec3::new(
+        (player_pos.x / CHUNK_SIZE as f32).floor() as i32,
+        (player_pos.y / CHUNK_SIZE as f32).floor() as i32,
+        (player_pos.z / CHUNK_SIZE as f32).floor() as i32,
+    );
+
+    let keys: Vec<_> = cache.meshes.keys().cloned().collect();
+    for (coord, lod) in keys {
+        let dist = (coord.x - player_chunk.x)
+            .abs()
+            .max((coord.z - player_chunk.z).abs());
+        if lod == 1 && dist <= LOD1_RADIUS {
+            if let Some(mesh) = cache.meshes.remove(&(coord, lod)) {
+                let handle = meshes.add(mesh);
+                let entity = commands
+                    .spawn((
+                        Mesh3d(handle),
+                        MeshMaterial3d(material.0.clone()),
+                        Transform::from_xyz(
+                            coord.x as f32 * CHUNK_SIZE as f32,
+                            coord.y as f32 * CHUNK_SIZE as f32,
+                            coord.z as f32 * CHUNK_SIZE as f32,
+                        ),
+                        Visibility::default(),
+                        Chunk { coord, lod },
+                    ))
+                    .id();
+                if let Some(old) = map.entities.insert(coord, entity) {
+                    commands.entity(old).despawn();
+                }
+            }
+        }
     }
 }
 
@@ -206,12 +335,14 @@ fn cleanup_chunks(
     chunks: Query<Entity, With<Chunk>>,
     mut map: ResMut<ChunkMap>,
     mut pending: ResMut<PendingTasks>,
+    mut cache: ResMut<ChunkCache>,
 ) {
     for e in &chunks {
         commands.entity(e).despawn();
     }
     map.entities.clear();
     pending.tasks.clear();
+    cache.meshes.clear();
 }
 
 fn frustum_cull_chunks(
