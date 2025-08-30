@@ -300,6 +300,24 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
         }
     };
 
+    let get_block = |voxels: &Vec<BlockType>, wx: i32, wy: i32, wz: i32| -> BlockType {
+        let lx = ((wx - coord.x * CHUNK_SIZE) / lod as i32) + 1;
+        let ly = ((wy - coord.y * CHUNK_SIZE) / lod as i32) + 1;
+        let lz = ((wz - coord.z * CHUNK_SIZE) / lod as i32) + 1;
+        if lx >= 0
+            && lx <= size_i32 + 1
+            && ly >= 0
+            && ly <= size_i32 + 1
+            && lz >= 0
+            && lz <= size_i32 + 1
+        {
+            let idx = shape.linearize([lx as u32, ly as u32, lz as u32]) as usize;
+            voxels[idx]
+        } else {
+            EMPTY
+        }
+    };
+
     // 2D terrain noise layers for varied heights
     let mut noises = Vec::new();
     for layer in &settings.layers {
@@ -319,9 +337,17 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
     cliff.set_noise_type(Some(NoiseType::Perlin));
     cliff.set_frequency(Some(0.01));
 
-    let mut boulder_noise = FastNoiseLite::with_seed(1337);
-    boulder_noise.set_noise_type(Some(NoiseType::Perlin));
-    boulder_noise.set_frequency(Some(0.001));
+    let mut boulder_density = FastNoiseLite::with_seed(1337);
+    boulder_density.set_noise_type(Some(NoiseType::Perlin));
+    boulder_density.set_frequency(Some(0.003));
+
+    let mut boulder_scatter = FastNoiseLite::with_seed(1338);
+    boulder_scatter.set_noise_type(Some(NoiseType::Perlin));
+    boulder_scatter.set_frequency(Some(0.08));
+
+    let mut boulder_shape = FastNoiseLite::with_seed(1339);
+    boulder_shape.set_noise_type(Some(NoiseType::Perlin));
+    boulder_shape.set_frequency(Some(0.3));
 
     let mut tree_density = FastNoiseLite::with_seed(4242);
     tree_density.set_noise_type(Some(NoiseType::Perlin));
@@ -393,30 +419,63 @@ fn build_mesh<const N: u32>(coord: IVec3, lod: u32, settings: &NoiseSettings) ->
             }
 
             if lod == 1 {
-                let b_val = boulder_noise.get_noise_2d(wx as f32, wz as f32);
-                let density = (tree_density.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
-                let scatter = (tree_scatter.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
-                if b_val > 0.2 {
-                    let radius = 1 + ((b_val - 0.9) * 10.0) as i32;
+                let t_density = (tree_density.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
+                let t_scatter = (tree_scatter.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
+                let b_density = (boulder_density.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
+                let b_scatter = (boulder_scatter.get_noise_2d(wx as f32, wz as f32) + 1.0) / 2.0;
+                if b_scatter < b_density * b_density * 0.3 {
+                    let variant = (boulder_scatter
+                        .get_noise_2d(wx as f32 + 2000.0, wz as f32 + 2000.0)
+                        + 1.0)
+                        / 2.0;
+                    let radius = 1 + (variant * 3.0) as i32;
                     for by in 0..=radius {
                         for bx in -radius..=radius {
                             for bz in -radius..=radius {
-                                if bx * bx + by * by + bz * bz <= radius * radius {
+                                let shape = (boulder_shape.get_noise_3d(
+                                    (wx + bx) as f32 * 0.3,
+                                    (height + by) as f32 * 0.3,
+                                    (wz + bz) as f32 * 0.3,
+                                ) + 1.0)
+                                    / 2.0;
+                                let r = (radius as f32) * (0.7 + shape * 0.6);
+                                if (bx * bx + by * by + bz * bz) as f32 <= r * r {
                                     set_block(&mut voxels, wx + bx, height + by, wz + bz, STONE);
                                 }
                             }
                         }
                     }
-                } else if scatter < density * density * 0.5 {
+                } else if t_scatter < t_density * t_density * 0.5 {
                     let variant =
                         (tree_scatter.get_noise_2d(wx as f32 + 1000.0, wz as f32 + 1000.0) + 1.0)
                             / 2.0;
-                    let trunk_h = 10 + (variant * 6.0) as i32;
+                    let trunk_size = (variant * 3.0).floor() as i32 + 1;
+                    let trunk_h = 6 + trunk_size * 4 + (variant * 2.0) as i32;
+                    let canopy = trunk_size * 2 + 2 + (variant * 2.0) as i32;
+
+                    let mut colliding = false;
+                    'check: for tx in 0..trunk_size {
+                        for tz in 0..trunk_size {
+                            for ty in 1..=trunk_h {
+                                if get_block(&voxels, wx + tx, height + ty, wz + tz) != EMPTY {
+                                    colliding = true;
+                                    break 'check;
+                                }
+                            }
+                        }
+                    }
+                    if colliding {
+                        continue;
+                    }
+
                     for ty in 1..=trunk_h {
-                        set_block(&mut voxels, wx, height + ty, wz, WOOD);
+                        for tx in 0..trunk_size {
+                            for tz in 0..trunk_size {
+                                set_block(&mut voxels, wx + tx, height + ty, wz + tz, WOOD);
+                            }
+                        }
                     }
                     let top = height + trunk_h;
-                    let canopy = 3 + (variant * 2.0) as i32;
                     for dx in -canopy..=canopy {
                         for dz in -canopy..=canopy {
                             for dy in 0..=canopy {

@@ -18,3 +18,5 @@
 - Chunk generation now spans the vertical axis, spawning up to eight stacked chunk layers for a full 3D grid.
 - Reduced-detail chunk rendering now begins beyond eight chunks from the player and samples the top surface block so distant terrain colors stay accurate.
 - Cliffs and overhangs form using extra ridged noise, with rarer stone boulders and noise-driven forests of taller wood-and-leaf trees.
+ - Boulder placement now mirrors tree generation with separate density and scatter noise and irregular 3D Perlin shapes.
+ - Tree trunks randomly span 1×1 to 3×3 blocks with proportionally scaled height and canopy radius, skipping spawn when trunks would collide.
