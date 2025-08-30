@@ -14,6 +14,9 @@
 - Chunks retain full detail within an eight-chunk radius, and distant low-detail meshes sample the surface block so colors remain accurate when approached.
 - Chunks now spawn in stacked vertical layers up to eight chunks high, enabling a fully 3D world grid.
 - Ridged noise adds cliffs and overhangs while boulder generation now uses density and scatter noise with irregular shapes, and trees vary trunk size with collision-safe placement.
+- Last processed player chunk cached so spawn/despawn logic runs only when moving between chunks.
+- Noise generators created once and shared through a `NoiseResources` Bevy resource, eliminating repeated `FastNoiseLite` setup.
+- Tree spawning consults a per-column occupancy map instead of scanning every trunk voxel, reducing generation cost.
 
 ## WIP
 - None

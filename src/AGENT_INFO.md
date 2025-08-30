@@ -20,3 +20,6 @@
 - Cliffs and overhangs form using extra ridged noise, with rarer stone boulders and noise-driven forests of taller wood-and-leaf trees.
  - Boulder placement now mirrors tree generation with separate density and scatter noise and irregular 3D Perlin shapes.
  - Tree trunks randomly span 1×1 to 3×3 blocks with proportionally scaled height and canopy radius, skipping spawn when trunks would collide.
+- Tracked the last processed player chunk so heavy spawn/despawn loops run only when crossing chunk boundaries.
+- Reused preconfigured `FastNoiseLite` generators stored in a `NoiseResources` Bevy resource during chunk mesh construction.
+- Introduced a per-column occupancy map that speeds up tree placement by checking column usage instead of scanning every trunk voxel.
